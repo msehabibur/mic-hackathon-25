@@ -122,7 +122,6 @@ def run_active_learning(
     try:
         model = timm.create_model(backbone, pretrained=True, num_classes=0)
     except:
-        # Fallback
         print(f"Backbone {backbone} not found, using resnet18")
         model = timm.create_model("resnet18", pretrained=True, num_classes=0)
         
@@ -146,7 +145,6 @@ def run_active_learning(
     features = np.concatenate(all_features, axis=0).astype(np.float32)
 
     # 2. Dimensionality Reduction (PCA)
-    # We use PCA first to denoise before IsolationForest or UMAP
     pca_dim = min(pca_dim, features.shape[1], features.shape[0])
     if pca_dim > 1:
         pca = PCA(n_components=pca_dim)
@@ -159,8 +157,7 @@ def run_active_learning(
     iso = IsolationForest(contamination=0.1, random_state=42, n_jobs=-1)
     # fit_predict returns -1 for outliers, 1 for inliers. 
     # We want high score for outliers.
-    preds = iso.fit_predict(features_reduced)
-    # decision_function: lower is more anomalous. We negate it.
+    iso.fit(features_reduced)
     raw_scores = -1 * iso.decision_function(features_reduced)
     
     score = normalize(raw_scores)
