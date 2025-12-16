@@ -44,8 +44,6 @@ def extract_patches(img: np.ndarray, patch_size: int, stride: int):
 def encode_patches(patches, model, device, batch_size=64):
     if not patches: return np.empty((0, 0))
     feats = []
-    # Simple resize to 224 for standard backbones if needed, 
-    # but for speed on varying patch sizes, we rely on CNN flexibility here.
     for i in range(0, len(patches), batch_size):
         batch_list = patches[i:i+batch_size]
         batch = np.stack(batch_list, axis=0)
@@ -153,36 +151,27 @@ def generate_sam_masks(img_pil_orig, top_regions):
     """
     Uses MobileSAM to generate segmentation masks from bounding box prompts.
     """
-    # Load lightweight SAM model (will download automatically first time)
     try:
-        # Using mobile_sam for speed on CPU. Could use 'sam_b.pt' if GPU available.
+        # Downloads lightweight model automatically
         model = SAM('mobile_sam.pt') 
     except Exception as e:
         print(f"SAM model failed to load: {e}")
         return []
 
-    # Convert PIL grayscale back to RGB for SAM
     img_rgb = img_pil_orig.convert("RGB")
     img_np = np.array(img_rgb)
     
     masks = []
     for r in top_regions:
-        # i=y, j=x. Bbox format: [x_min, y_min, x_max, y_max]
         bbox = [r["j"], r["i"], r["j"] + r["size"], r["i"] + r["size"]]
-        
-        # Run SAM inference with bbox prompt
         results = model.predict(img_np, bboxes=[bbox], verbose=False)
         
         if results[0].masks is not None:
-            # Get the first mask found
             mask_data = results[0].masks.data[0].cpu().numpy().astype(np.uint8)
-            
-            # Resize mask back to original image size if SAM resized it
+            # Resize mask if needed
             if mask_data.shape != img_np.shape[:2]:
                  mask_data = cv2.resize(mask_data, (img_np.shape[1], img_np.shape[0]), interpolation=cv2.INTER_NEAREST)
-                 
             masks.append(mask_data)
         else:
-            masks.append(None) # No mask found for box
-            
+            masks.append(None)
     return masks
