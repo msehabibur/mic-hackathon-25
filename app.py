@@ -193,8 +193,11 @@ if st.session_state.results is not None:
     
     # Enable multiple selection box
     fig.update_layout(dragmode='select', clickmode='event+select')
-    fig.update_traces(selected=dict(marker=dict(opacity=1.0, line=dict(width=2, color='black'))),
-                      unselected=dict(marker=dict(opacity=0.3)))
+# NEW / FIXED CODE
+# We removed 'line' from selected/marker because it causes the crash
+    fig.update_traces(
+        selected=dict(marker=dict(opacity=1.0)), 
+        unselected=dict(marker=dict(opacity=0.1)))
 
     # Display chart and capture selection state
     st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="umap_selection")
