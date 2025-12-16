@@ -34,7 +34,7 @@ with st.sidebar.expander("Advanced Params"):
 run_btn = st.sidebar.button("🚀 Run Analysis")
 
 # -----------------------
-# Main Execution
+# Main Execution Logic
 # -----------------------
 if uploaded:
     # Load Image
@@ -59,115 +59,162 @@ if uploaded:
             st.session_state.mode = "Unsupervised"
 
 # -----------------------
-# Visualization Dashboard
+# Tabs Layout
 # -----------------------
-if st.session_state.results is not None:
-    res = st.session_state.results
-    img = st.session_state.img_cache
-    score = st.session_state.current_score
-    scan_map = st.session_state.current_map
-    
-    # Compute Top-K for current scores
-    top_regions = compute_top_k(score, res["coords"], k=10)
+tab_main, tab_info = st.tabs(["🚀 Main Application", "ℹ️ How It Works"])
 
-    # --- Header Metrics ---
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Mode", st.session_state.mode)
-    m2.metric("Patches Analyzed", len(score))
-    m3.metric("Backend", res["device"])
-
-    st.divider()
-
-    # --- ROW 1: Heatmaps ---
-    c1, c2 = st.columns([1, 1])
-    
-    with c1:
-        st.subheader("input Image")
-        fig, ax = plt.subplots(figsize=(6, 6))
-        ax.imshow(img, cmap="gray")
-        ax.axis("off")
+# ==========================================
+# TAB 1: Main Application
+# ==========================================
+with tab_main:
+    if st.session_state.results is not None:
+        res = st.session_state.results
+        img = st.session_state.img_cache
+        score = st.session_state.current_score
+        scan_map = st.session_state.current_map
         
-        # Overlay Top-K boxes
-        for r in top_regions:
-            rect = mpatches.Rectangle((r["j"], r["i"]), r["size"], r["size"], 
-                                    linewidth=2, edgecolor="lime", facecolor="none")
-            ax.add_patch(rect)
-            ax.text(r["j"], max(r["i"]-5, 0), str(r["rank"]), color="lime", fontsize=10, weight="bold")
-        st.pyplot(fig)
+        # Compute Top-K for current scores
+        top_regions = compute_top_k(score, res["coords"], k=10)
 
-    with c2:
-        st.subheader("Priority Heatmap")
-        fig, ax = plt.subplots(figsize=(6, 6))
-        ax.imshow(img, cmap="gray", alpha=0.4)
-        im = ax.imshow(scan_map, cmap="jet", alpha=0.6)
-        ax.axis("off")
-        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        st.pyplot(fig)
+        # --- Header Metrics ---
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Mode", st.session_state.mode)
+        m2.metric("Patches Analyzed", len(score))
+        m3.metric("Backend", res["device"])
 
-    st.divider()
+        st.divider()
 
-    # --- ROW 2: Human-in-the-Loop Feedback ---
-    st.header("🧠 Teacher Mode (Human-in-the-Loop)")
-    
-    fb_col1, fb_col2 = st.columns([1, 2])
-    
-    with fb_col1:
-        st.info("Select a region that looks interesting to find more like it.")
+        # --- ROW 1: Heatmaps ---
+        c1, c2 = st.columns([1, 1])
         
-        # Dropdown to select a region from Top-10
-        selected_rank = st.selectbox(
-            "Select a ROI (Rank):", 
-            options=[r["rank"] for r in top_regions],
-            format_func=lambda x: f"Region #{x}"
-        )
-        
-        # Get the actual index in the feature array
-        selection = next(r for r in top_regions if r["rank"] == selected_rank)
-        sel_idx = selection["id"]
-        
-        c_sim, c_diff = st.columns(2)
-        if c_sim.button("Find Similar 🔍"):
-            new_scores, new_map = rerank_global(res["features"], res["coords"], img.shape, sel_idx, mode="similar")
-            st.session_state.current_score = new_scores
-            st.session_state.current_map = new_map
-            st.session_state.mode = f"Similar to #{selected_rank}"
-            st.rerun()
+        with c1:
+            st.subheader("Input Image")
+            fig, ax = plt.subplots(figsize=(6, 6))
+            ax.imshow(img, cmap="gray")
+            ax.axis("off")
             
-        if c_diff.button("Find Anomaly ⚡"):
-            new_scores, new_map = rerank_global(res["features"], res["coords"], img.shape, sel_idx, mode="dissimilar")
-            st.session_state.current_score = new_scores
-            st.session_state.current_map = new_map
-            st.session_state.mode = f"Dissimilar to #{selected_rank}"
-            st.rerun()
+            # Overlay Top-K boxes
+            for r in top_regions:
+                rect = mpatches.Rectangle((r["j"], r["i"]), r["size"], r["size"], 
+                                        linewidth=2, edgecolor="lime", facecolor="none")
+                ax.add_patch(rect)
+                ax.text(r["j"], max(r["i"]-5, 0), str(r["rank"]), color="lime", fontsize=10, weight="bold")
+            st.pyplot(fig)
 
-        if st.button("Reset to Default 🔄"):
-            st.session_state.current_score = res["score"]
-            st.session_state.current_map = res["scan_map"]
-            st.session_state.mode = "Unsupervised"
-            st.rerun()
+        with c2:
+            st.subheader("Priority Heatmap")
+            fig, ax = plt.subplots(figsize=(6, 6))
+            ax.imshow(img, cmap="gray", alpha=0.4)
+            im = ax.imshow(scan_map, cmap="jet", alpha=0.6)
+            ax.axis("off")
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            st.pyplot(fig)
 
-    with fb_col2:
-        st.subheader("Patch Similarity Space (Interactive)")
-        # Prepare Data for Plotly
-        df_umap = pd.DataFrame(res["embedding"], columns=["x", "y"])
-        df_umap["score"] = st.session_state.current_score
+        st.divider()
+
+        # --- ROW 2: Human-in-the-Loop Feedback ---
+        st.header("🧠 Teacher Mode (Human-in-the-Loop)")
         
-        # Highlight selected point
-        df_umap["size"] = 2
-        df_umap.loc[sel_idx, "size"] = 15 # Make selected point big
-        df_umap["color_type"] = "Normal"
-        df_umap.loc[sel_idx, "color_type"] = "Selected"
+        fb_col1, fb_col2 = st.columns([1, 2])
+        
+        with fb_col1:
+            st.info("Select a region that looks interesting to find more like it.")
+            
+            # Dropdown to select a region from Top-10
+            selected_rank = st.selectbox(
+                "Select a ROI (Rank):", 
+                options=[r["rank"] for r in top_regions],
+                format_func=lambda x: f"Region #{x}"
+            )
+            
+            # Get the actual index in the feature array
+            selection = next(r for r in top_regions if r["rank"] == selected_rank)
+            sel_idx = selection["id"]
+            
+            c_sim, c_diff = st.columns(2)
+            if c_sim.button("Find Similar 🔍"):
+                new_scores, new_map = rerank_global(res["features"], res["coords"], img.shape, sel_idx, mode="similar")
+                st.session_state.current_score = new_scores
+                st.session_state.current_map = new_map
+                st.session_state.mode = f"Similar to #{selected_rank}"
+                st.rerun()
+                
+            if c_diff.button("Find Anomaly ⚡"):
+                new_scores, new_map = rerank_global(res["features"], res["coords"], img.shape, sel_idx, mode="dissimilar")
+                st.session_state.current_score = new_scores
+                st.session_state.current_map = new_map
+                st.session_state.mode = f"Dissimilar to #{selected_rank}"
+                st.rerun()
 
-        fig = px.scatter(
-            df_umap, x="x", y="y", 
-            color="score", 
-            size="size",
-            color_continuous_scale="Jet",
-            title="UMAP Feature Space",
-            hover_data={"x": False, "y": False, "score": True}
-        )
-        fig.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
-        st.plotly_chart(fig, use_container_width=True)
+            if st.button("Reset to Default 🔄"):
+                st.session_state.current_score = res["score"]
+                st.session_state.current_map = res["scan_map"]
+                st.session_state.mode = "Unsupervised"
+                st.rerun()
 
-elif not uploaded:
-    st.info("👈 Please upload an image in the sidebar to start.")
+        with fb_col2:
+            st.subheader("Patch Similarity Space (Interactive)")
+            # Prepare Data for Plotly
+            df_umap = pd.DataFrame(res["embedding"], columns=["x", "y"])
+            df_umap["score"] = st.session_state.current_score
+            
+            # Highlight selected point
+            df_umap["size"] = 2
+            df_umap.loc[sel_idx, "size"] = 15 # Make selected point big
+            df_umap["color_type"] = "Normal"
+            df_umap.loc[sel_idx, "color_type"] = "Selected"
+
+            fig = px.scatter(
+                df_umap, x="x", y="y", 
+                color="score", 
+                size="size",
+                color_continuous_scale="Jet",
+                title="UMAP Feature Space",
+                hover_data={"x": False, "y": False, "score": True}
+            )
+            fig.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+
+    elif not uploaded:
+        st.info("👈 Please upload an image in the sidebar to start.")
+
+# ==========================================
+# TAB 2: How It Works (Educational)
+# ==========================================
+with tab_info:
+    st.header("🧠 The Logic Behind the Tool")
+    
+    st.markdown("""
+    This tool moves beyond simple image processing by using **Unsupervised Deep Learning** to understand texture and semantics.
+    """)
+    
+    st.subheader("1. The Backbone (Vision)")
+    st.markdown("""
+    We treat the microscope image not as pixels, but as a collection of concepts.
+    * **Sliding Window:** We cut the image into small patches (e.g., 32x32). 
+    * **Neural Network:** A pre-trained AI (ResNet/ConvNext) looks at each patch and converts it into a "fingerprint" (embedding). 
+    * *Result:* Patches that look similar have similar fingerprints, even if they are in different parts of the image.
+    """)
+    
+    st.divider()
+    
+    st.subheader("2. Anomaly Detection (Isolation Forest)")
+    st.markdown("""
+    How do we know what is "interesting"?
+    * We use an **Isolation Forest** algorithm on the fingerprints. 
+    * It builds random decision trees to try and isolate every patch.
+    * **Rare/Anomalous patches** are easy to isolate (short paths).
+    * **Background patches** are hard to isolate (deep paths).
+    * *Result:* A mathematical score of "rarity" for every pixel.
+    """)
+    
+    st.divider()
+    
+    st.subheader("3. Human-in-the-Loop (Teacher Mode)")
+    st.info("This is the 'Winning' feature.")
+    st.markdown("""
+    Unsupervised learning is just a guess. The **Teacher Mode** lets you correct it.
+    * When you click **'Find Similar'**, we take the fingerprint of your selection.
+    * We calculate the **Cosine Similarity** between that fingerprint and every other patch.
+    * The heatmap updates to highlight *only* the regions that match your specific scientific query.
+    """)
