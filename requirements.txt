@@ -1,8 +1,11 @@
+streamlit
 numpy
-torch
-timm
-umap-learn
-scikit-learn
+pandas
 matplotlib
-pillow
-opencv-python-headless
+torch
+torchvision
+timm
+scikit-learn
+umap-learn
+plotly
+Pillow
