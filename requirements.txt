@@ -9,3 +9,4 @@ timm
 umap-learn
 Pillow
 transformers
+scikit-image
