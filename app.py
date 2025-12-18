@@ -205,7 +205,6 @@ page_selection = st.sidebar.radio("Go to:", ["🚀 Main Application", "📘 The 
 if page_selection == "🚀 Main Application":
     st.title("🔬 DeepScan Pro: Intelligent Microscopy")
     
-    # Initialize State
     if "results" not in st.session_state: st.session_state.results = None
     if "img_cache" not in st.session_state: st.session_state.img_cache = None
     if "history" not in st.session_state: st.session_state.history = []
@@ -323,7 +322,7 @@ if page_selection == "🚀 Main Application":
                 plt.colorbar(im, ax=ax)
                 st.pyplot(fig)
             
-            # --- DEFECT GALLERY (NEW) ---
+            # --- DEFECT GALLERY ---
             st.divider()
             st.subheader("🔍 Identified Anomalies (Zoomed Views)")
             cols = st.columns(5)
@@ -436,7 +435,7 @@ if page_selection == "🚀 Main Application":
          st.warning("⚠️ Loading demo image...")
          st.rerun()
 
-# --- PAGE 2: THE MATH BEHIND IT (EXPANDED) ---
+# --- PAGE 2: THE MATH BEHIND IT (FIXED FOR CLEAN DISPLAY) ---
 elif page_selection == "📘 The Math Behind It":
     st.title("📘 The Science of DeepScan")
     st.markdown("""
@@ -448,12 +447,8 @@ elif page_selection == "📘 The Math Behind It":
 
     st.header("1. Sliding Window & Feature Extraction")
     st.markdown("""
-    
-
-[Image of neural network convolution diagram]
-
     The high-resolution microscope image $I$ is essentially a massive matrix of pixels. 
-    We cannot process it all at once, so we decompose it into small overlapping patches $p_{i,j}$.
+    We cannot process it all at once, so we decompose it into small overlapping patches.
     
     **The Neural Backbone:**
     We use **RegNet** or **ConvNeXt**, which are modern Convolutional Neural Networks (CNNs).
@@ -485,7 +480,6 @@ elif page_selection == "📘 The Math Behind It":
 
     st.header("3. Unsupervised Anomaly Detection (Isolation Forest)")
     st.markdown("""
-    
     How do we know what is "interesting" without any labels? We assume that **rare** things are interesting.
     We use an **Isolation Forest**, which builds random decision trees.
     
