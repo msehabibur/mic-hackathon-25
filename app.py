@@ -1,10 +1,12 @@
 import io
+import os
 import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import plotly.express as px
+import plotly.graph_objects as go
 import torch
 import timm
 import umap
@@ -13,9 +15,7 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import IsolationForest
 from sklearn.linear_model import LogisticRegression
 import torch.nn.functional as F
-from skimage import data, util # For default demo image
-
-# New Import for Text Search
+from skimage import data, util 
 from transformers import CLIPProcessor, CLIPModel
 
 # -----------------------------------------------------------------------------
@@ -32,21 +32,31 @@ st.set_page_config(
 # 2. CORE UTILITIES & AI LOGIC
 # -----------------------------------------------------------------------------
 
-def load_image_grayscale(file) -> np.ndarray:
+def load_image_grayscale(file_or_path) -> np.ndarray:
     try:
-        img = Image.open(file).convert("L")
+        if isinstance(file_or_path, str):
+            img = Image.open(file_or_path).convert("L")
+        else:
+            img = Image.open(file_or_path).convert("L")
+            
         img = np.asarray(img, dtype=np.float32)
         denom = (img.max() - img.min())
         if denom < 1e-12: return np.zeros_like(img, dtype=np.float32)
         return (img - img.min()) / denom
     except Exception as e:
+        # st.error(f"Error loading image: {e}")
         return np.zeros((256, 256), dtype=np.float32)
 
 def get_default_image() -> np.ndarray:
-    """Loads a default STEM-like example if no file is uploaded."""
-    # We use a scientific sample from scikit-image (e.g., micro-structure)
-    img = util.img_as_float(data.brick()) # 'brick' has good texture for anomaly detection
-    return img
+    """Checks for 'STEM_example' in root, otherwise uses fallback."""
+    # Priority 1: Check for local file in root
+    possible_names = ["STEM_example.png", "STEM_example.jpg", "STEM_example.tif", "STEM_example.jpeg"]
+    for fname in possible_names:
+        if os.path.exists(fname):
+            return load_image_grayscale(fname)
+    
+    # Priority 2: Fallback to scientific sample if file missing
+    return util.img_as_float(data.brick())
 
 def normalize(x: np.ndarray) -> np.ndarray:
     x = x.astype(np.float32)
@@ -221,7 +231,7 @@ if page_selection == "🚀 Main Application":
         # Load Default Demo Image on Startup
         img = get_default_image()
         st.session_state.img_cache = img
-        st.sidebar.info("ℹ️ Using Default Demo Image")
+        st.sidebar.info("ℹ️ Loaded Default STEM_example")
 
     # Update cache if image changed
     if st.session_state.img_cache is None or not np.array_equal(img, st.session_state.img_cache):
@@ -287,13 +297,11 @@ if page_selection == "🚀 Main Application":
                 st.pyplot(fig)
 
             with c2:
-                st.subheader(f"Heatmap ({st.session_state.mode})")
-                fig, ax = plt.subplots(figsize=(6, 6))
-                ax.imshow(img, cmap="gray", alpha=0.4)
-                im = ax.imshow(st.session_state.current_map, cmap="jet", alpha=0.6)
-                ax.axis("off")
-                plt.colorbar(im, ax=ax)
-                st.pyplot(fig)
+                st.subheader(f"3D Topography ({st.session_state.mode})")
+                # NEW: 3D Surface Plot for the "Wow" factor
+                fig_3d = go.Figure(data=[go.Surface(z=st.session_state.current_map, colorscale='Jet')])
+                fig_3d.update_layout(title='Anomaly Landscape', autosize=False, width=400, height=400, margin=dict(l=0, r=0, b=0, t=30))
+                st.plotly_chart(fig_3d, use_container_width=True)
             
             st.divider()
             
@@ -373,6 +381,8 @@ if page_selection == "🚀 Main Application":
             st.download_button("Download CSV 📄", df_rep.to_csv(index=False), "efficiency_report.csv", "text/csv")
             
     elif not uploaded and st.session_state.img_cache is None:
+         # This block handles the first load if no image is in cache
+         # It will trigger the "Input & Settings" logic above to load default
          st.warning("⚠️ Loading demo image...")
          st.rerun()
 
@@ -382,46 +392,33 @@ elif page_selection == "📘 The Math Behind It":
     st.markdown("This application uses a pipeline of **Self-Supervised Learning** and **Active Learning**. Here is the mathematical foundation.")
     
     st.header("1. Feature Extraction (RegNet/ConvNeXt)")
-    st.markdown(r"""
-    
-
-[Image of neural network convolution diagram]
-
-    
-    We map an image patch $x \in \mathbb{R}^{H \times W}$ to a feature vector $z \in \mathbb{R}^d$ using a Convolutional Neural Network (CNN) $f_\theta$:
-    $$ z = f_\theta(x) $$
-    These features capture texture and geometry invariant to rotation or slight shifts.
-    """)
+    st.markdown("We map an image patch $x \\in \\mathbb{R}^{H \\times W}$ to a feature vector $z \\in \\mathbb{R}^d$ using a Convolutional Neural Network (CNN) $f_\\theta$:")
+    st.latex(r"z = f_\theta(x)")
+    st.markdown("These features capture texture and geometry invariant to rotation or slight shifts.")
     
     st.divider()
     
     st.header("2. Anomaly Detection (Isolation Forest)")
-    st.markdown(r"""
+    st.markdown("To find interesting regions without labels, we use **Isolation Forests**. The core idea is that *anomalies are easier to isolate* (require fewer random cuts).")
+    st.markdown("The anomaly score $s(x, n)$ for a sample $x$ in a dataset of size $n$ is:")
     
+    st.latex(r"s(x, n) = 2^{- \frac{E(h(x))}{c(n)}}")
     
-    To find interesting regions without labels, we use **Isolation Forests**. The core idea is that *anomalies are easier to isolate* (require fewer random cuts).
-    The anomaly score $s(x, n)$ for a sample $x$ in a dataset of size $n$ is:
-    
-    $$ s(x, n) = 2^{- \frac{E(h(x))}{c(n)}} $$
-    
+    st.markdown("""
     Where:
     * $h(x)$ is the path length (number of splits) to isolate sample $x$.
     * $E(h(x))$ is the average path length across a forest of random trees.
     * $c(n)$ is a normalization factor (average path length of a binary search tree).
     
-    If $s(x, n) \to 1$, the sample is an **anomaly** (interesting).
-    If $s(x, n) \to 0.5$, the sample is **background** (boring).
+    If $s(x, n) \\to 1$, the sample is an **anomaly** (interesting).
+    If $s(x, n) \\to 0.5$, the sample is **background** (boring).
     """)
 
     st.divider()
 
     st.header("3. Semantic Search (CLIP)")
-    st.markdown(r"""
+    st.markdown("For text search, we use **CLIP (Contrastive Language-Image Pre-training)**. It aligns image embeddings $I_f$ and text embeddings $T_f$ in a shared space by maximizing the cosine similarity for correct pairs:")
     
+    st.latex(r"\text{similarity}(I, T) = \frac{I_f \cdot T_f}{\|I_f\| \|T_f\|}")
     
-    For text search, we use **CLIP (Contrastive Language-Image Pre-training)**. It aligns image embeddings $I_f$ and text embeddings $T_f$ in a shared space by maximizing the cosine similarity for correct pairs:
-    
-    $$ \text{similarity}(I, T) = \frac{I_f \cdot T_f}{\|I_f\| \|T_f\|} $$
-    
-    The loss function minimizes the distance between the user's query ("defects") and the matching image patches.
-    """)
+    st.markdown("The loss function minimizes the distance between the user's query ('defects') and the matching image patches.")
