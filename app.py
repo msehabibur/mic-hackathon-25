@@ -12,7 +12,7 @@ from PIL import Image
 from sklearn.decomposition import PCA
 from sklearn.ensemble import IsolationForest
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics.pairwise import cosine_similarity
+import torch.nn.functional as F
 
 # -----------------------------------------------------------------------------
 # 1. CORE UTILITIES & AI LOGIC
@@ -42,31 +42,33 @@ def build_scan_map(img_shape, coords, score):
         count[i:i+size, j:j+size] += 1.0
     return scan_map / np.maximum(count, 1.0)
 
-def extract_patches(img, patch_sizes, strides):
+def extract_patches_single_size(img, patch_size, stride):
+    """
+    Extracts patches of a SINGLE fixed size.
+    """
     patches, coords = [], []
     H, W = img.shape
-    for ps, st in zip(patch_sizes, strides):
-        for i in range(0, H - ps + 1, st):
-            for j in range(0, W - ps + 1, st):
-                patches.append(img[i:i+ps, j:j+ps])
-                coords.append((i, j, ps))
+    for i in range(0, H - patch_size + 1, stride):
+        for j in range(0, W - patch_size + 1, stride):
+            patches.append(img[i:i+patch_size, j:j+patch_size])
+            coords.append((i, j, patch_size))
     return patches, coords
 
 @torch.no_grad()
-def get_features(patches, backbone_name, device, batch_size=64):
+def get_features(patches, backbone_name, device, batch_size=32):
     """
-    Extracts features. Supports DINOv2 and Standard ResNets.
+    Extracts features. Resizes all patches to 224x224 to keep the model happy.
     """
+    if not patches: return np.empty((0, 0))
+
     # Load Model
     if "dino" in backbone_name:
         try:
-            # Load DINOv2 from Torch Hub
             model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
         except:
-            st.warning("⚠️ DINOv2 download failed (network issue?), falling back to ResNet18.")
+            st.warning("⚠️ DINOv2 failed to load, using ResNet18.")
             model = timm.create_model("resnet18", pretrained=True, num_classes=0)
     else:
-        # Standard timm models
         try:
             model = timm.create_model(backbone_name, pretrained=True, num_classes=0)
         except:
@@ -74,23 +76,24 @@ def get_features(patches, backbone_name, device, batch_size=64):
 
     model = model.to(device).eval()
     
-    # Process in batches
     feats = []
+    # Process in batches
     for i in range(0, len(patches), batch_size):
         batch_list = patches[i:i+batch_size]
+        
+        # 1. Stack numpy arrays (They are guaranteed to be same size now)
         batch_np = np.stack(batch_list, axis=0)
         
-        # Preprocessing: Add channel dim and repeat to 3 channels (RGB)
+        # 2. Convert to Torch (B, 1, H, W) -> Repeat to RGB (B, 3, H, W)
         x = torch.tensor(batch_np, dtype=torch.float32, device=device).unsqueeze(1)
-        x = x.repeat(1, 3, 1, 1) # (B, 3, H, W)
+        x = x.repeat(1, 3, 1, 1) 
         
-        # Resize if using DINO (it expects patch multiples of 14, usually handles arbitrary but resizing is safer)
-        if "dino" in backbone_name and x.shape[-1] < 14:
-             x = torch.nn.functional.interpolate(x, size=(14, 14), mode='bilinear')
+        # 3. Resize to standard 224x224 (Critical for model stability)
+        x = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
 
         output = model(x)
         
-        # DINOv2 outputs specific structures, we need the CLS token or plain features
+        # Handle DINO vs ResNet output formats
         if isinstance(output, dict):
             f = output['x_norm_clstoken'].detach().cpu().numpy()
         else:
@@ -98,51 +101,78 @@ def get_features(patches, backbone_name, device, batch_size=64):
             
         feats.append(f)
         
-    return np.concatenate(feats, axis=0)
+    return np.concatenate(feats, axis=0) if feats else np.empty((0,0))
 
 def run_analysis_pipeline(img, backbone, patch_sizes, strides, pca_dim=50):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # 1. Extract
-    patches, coords = extract_patches(img, patch_sizes, strides)
-    if not patches: return None
+    all_features = []
+    all_coords = []
+    
+    # LOOP over sizes separately to avoid shape mismatch errors
+    for ps, st in zip(patch_sizes, strides):
+        # 1. Extract
+        p_curr, c_curr = extract_patches_single_size(img, ps, st)
+        if not p_curr: continue
+        
+        # 2. Get Features (returns (N, D) array)
+        f_curr = get_features(p_curr, backbone, device)
+        
+        all_features.append(f_curr)
+        all_coords.extend(c_curr)
+    
+    if not all_features:
+        return None
 
-    # 2. Features
-    features = get_features(patches, backbone, device)
+    # Concatenate features from different patch sizes
+    features = np.concatenate(all_features, axis=0)
     
     # 3. PCA
-    pca = PCA(n_components=min(pca_dim, features.shape[0], features.shape[1]))
-    features_reduced = pca.fit_transform(features)
+    n_samples, n_dim = features.shape
+    pca_n = min(pca_dim, n_samples, n_dim)
+    if pca_n > 1:
+        pca = PCA(n_components=pca_n)
+        features_reduced = pca.fit_transform(features)
+    else:
+        features_reduced = features
     
     # 4. Anomaly Detection (Isolation Forest)
     iso = IsolationForest(contamination=0.1, random_state=42, n_jobs=-1)
     iso.fit(features_reduced)
     score = normalize(-1 * iso.decision_function(features_reduced))
     
-    # 5. Embedding (UMAP)
+    # 5. Embedding (UMAP) - Fallback if data is too small
     try:
         embedding = umap.UMAP(n_neighbors=15, min_dist=0.1, n_components=2).fit_transform(features_reduced)
     except:
-        embedding = features_reduced[:, :2]
+        embedding = np.zeros((len(features), 2))
+        if features_reduced.shape[1] >= 2:
+            embedding = features_reduced[:, :2]
 
     return {
         "features": features_reduced,
-        "coords": coords,
+        "coords": all_coords,
         "score": score,
-        "scan_map": build_scan_map(img.shape, coords, score),
+        "scan_map": build_scan_map(img.shape, all_coords, score),
         "embedding": embedding,
         "device": str(device)
     }
 
 def train_classifier(features, coords, img_shape, pos_idx, neg_indices=None):
     """Refines the heatmap using Logistic Regression (Active Learning)."""
+    # Safety check
+    if pos_idx >= len(features): return np.zeros(len(features)), np.zeros(img_shape)
+
     X_train = [features[pos_idx]]
     y_train = [1]
     
     # Negative Mining
     if not neg_indices:
         import random
-        neg_indices = random.sample(range(len(features)), 5)
+        # Pick random indices that are NOT the positive one
+        candidates = list(range(len(features)))
+        candidates.remove(pos_idx)
+        neg_indices = random.sample(candidates, min(5, len(candidates)))
     
     for idx in neg_indices:
         X_train.append(features[idx])
@@ -189,13 +219,17 @@ if uploaded:
             # Map selection to actual model name
             model_name = "dinov2_vits14" if "dino" in backbone else backbone
             
+            # Pass patch sizes as tuple
             res = run_analysis_pipeline(img, model_name, (32, 64), (16, 32))
             
-            st.session_state.results = res
-            st.session_state.current_score = res["score"]
-            st.session_state.current_map = res["scan_map"]
-            st.session_state.mode = "Unsupervised"
-            st.session_state.history.append(res["scan_map"]) # Save baseline
+            if res:
+                st.session_state.results = res
+                st.session_state.current_score = res["score"]
+                st.session_state.current_map = res["scan_map"]
+                st.session_state.mode = "Unsupervised"
+                st.session_state.history.append(res["scan_map"]) # Save baseline
+            else:
+                st.error("Could not extract patches. Image might be too small.")
 
 if st.session_state.results is not None:
     res = st.session_state.results
@@ -219,7 +253,7 @@ if st.session_state.results is not None:
         for r in top_regions:
             rect = mpatches.Rectangle((r["j"], r["i"]), r["size"], r["size"], linewidth=2, edgecolor="lime", facecolor="none")
             ax.add_patch(rect)
-            ax.text(r["j"], r["i"]-5, str(r["rank"]), color="lime", weight="bold")
+            ax.text(r["j"], max(0, r["i"]-5), str(r["rank"]), color="lime", weight="bold")
         ax.axis("off")
         st.pyplot(fig)
 
@@ -254,17 +288,26 @@ if st.session_state.results is not None:
             st.session_state.current_score = res["score"]
             st.session_state.current_map = res["scan_map"]
             st.session_state.mode = "Unsupervised"
-            st.session_state.history = [st.session_state.history[0]] # Keep only baseline
+            # Keep only baseline in history or reset? Let's reset history to baseline
+            if st.session_state.history:
+                 st.session_state.history = [st.session_state.history[0]]
             st.rerun()
 
     with col_plot:
         st.subheader("Patch Similarity Space")
-        df = pd.DataFrame(res["embedding"], columns=["x", "y"])
-        df["score"] = score
-        df["size"] = 2
-        df.loc[target["id"], "size"] = 10
-        fig = px.scatter(df, x="x", y="y", color="score", size="size", color_continuous_scale="Jet")
-        st.plotly_chart(fig, use_container_width=True)
+        # Safety for UMAP
+        embed_data = res["embedding"]
+        if embed_data.shape[0] != len(score):
+            st.warning("Embedding size mismatch.")
+        else:
+            df = pd.DataFrame(embed_data, columns=["x", "y"])
+            df["score"] = score
+            df["size"] = 2
+            if target["id"] < len(df):
+                df.loc[target["id"], "size"] = 10
+                
+            fig = px.scatter(df, x="x", y="y", color="score", size="size", color_continuous_scale="Jet")
+            st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
 
