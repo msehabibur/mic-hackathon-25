@@ -13,12 +13,23 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import IsolationForest
 from sklearn.linear_model import LogisticRegression
 import torch.nn.functional as F
+from skimage import data, util # For default demo image
 
 # New Import for Text Search
 from transformers import CLIPProcessor, CLIPModel
 
 # -----------------------------------------------------------------------------
-# 1. CORE UTILITIES & AI LOGIC
+# 1. PAGE CONFIGURATION
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="DeepScan Pro: Intelligent Microscopy",
+    page_icon="🔬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# -----------------------------------------------------------------------------
+# 2. CORE UTILITIES & AI LOGIC
 # -----------------------------------------------------------------------------
 
 def load_image_grayscale(file) -> np.ndarray:
@@ -30,6 +41,12 @@ def load_image_grayscale(file) -> np.ndarray:
         return (img - img.min()) / denom
     except Exception as e:
         return np.zeros((256, 256), dtype=np.float32)
+
+def get_default_image() -> np.ndarray:
+    """Loads a default STEM-like example if no file is uploaded."""
+    # We use a scientific sample from scikit-image (e.g., micro-structure)
+    img = util.img_as_float(data.brick()) # 'brick' has good texture for anomaly detection
+    return img
 
 def normalize(x: np.ndarray) -> np.ndarray:
     x = x.astype(np.float32)
@@ -46,9 +63,6 @@ def build_scan_map(img_shape, coords, score):
     return scan_map / np.maximum(count, 1.0)
 
 def extract_patches_single_size(img, patch_size, stride):
-    """
-    Extracts patches of a SINGLE fixed size.
-    """
     patches, coords = [], []
     H, W = img.shape
     for i in range(0, H - patch_size + 1, stride):
@@ -57,7 +71,7 @@ def extract_patches_single_size(img, patch_size, stride):
             coords.append((i, j, patch_size))
     return patches, coords
 
-# --- CACHED MODEL LOADING (Performance) ---
+# --- CACHED MODEL LOADING ---
 @st.cache_resource
 def load_clip_model():
     model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
@@ -66,13 +80,9 @@ def load_clip_model():
 
 @torch.no_grad()
 def get_features(patches, backbone_name, device, batch_size=32):
-    """
-    Extracts features using timm models (RegNet, ConvNeXt, ResNet).
-    """
     if not patches: return np.empty((0, 0))
 
     try:
-        # Load model from timm
         model = timm.create_model(backbone_name, pretrained=True, num_classes=0)
     except Exception as e:
         st.error(f"Error loading {backbone_name}: {e}")
@@ -81,18 +91,12 @@ def get_features(patches, backbone_name, device, batch_size=32):
     model = model.to(device).eval()
     
     feats = []
-    # Process in batches
     for i in range(0, len(patches), batch_size):
         batch_list = patches[i:i+batch_size]
-        
-        # 1. Stack numpy arrays
         batch_np = np.stack(batch_list, axis=0)
         
-        # 2. Convert to Torch (B, 1, H, W) -> Repeat to RGB (B, 3, H, W)
         x = torch.tensor(batch_np, dtype=torch.float32, device=device).unsqueeze(1)
         x = x.repeat(1, 3, 1, 1) 
-        
-        # 3. Resize to standard 224x224 (Critical for model stability)
         x = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
 
         output = model(x)
@@ -103,31 +107,23 @@ def get_features(patches, backbone_name, device, batch_size=32):
 
 @torch.no_grad()
 def search_by_text(patches, text_query, device="cpu", batch_size=32):
-    """
-    Computes similarity between image patches and a text query using CLIP.
-    """
     model, processor = load_clip_model()
     model = model.to(device)
     
-    # 1. Encode Text
     inputs_text = processor(text=[text_query], return_tensors="pt", padding=True)
     text_features = model.get_text_features(input_ids=inputs_text["input_ids"].to(device),
                                             attention_mask=inputs_text["attention_mask"].to(device))
-    text_features /= text_features.norm(dim=-1, keepdim=True) # Normalize
+    text_features /= text_features.norm(dim=-1, keepdim=True) 
 
     scores = []
-    
-    # 2. Encode Images in Batches
     for i in range(0, len(patches), batch_size):
         batch_list = patches[i:i+batch_size]
-        # Convert grayscale numpy to PIL RGB
         batch_pil = [Image.fromarray((p * 255).astype(np.uint8)).convert("RGB") for p in batch_list]
         
         inputs_img = processor(images=batch_pil, return_tensors="pt")
         img_features = model.get_image_features(pixel_values=inputs_img["pixel_values"].to(device))
         img_features /= img_features.norm(dim=-1, keepdim=True)
         
-        # Dot product = Similarity
         batch_scores = (img_features @ text_features.T).squeeze(1).cpu().numpy()
         scores.append(batch_scores)
 
@@ -135,77 +131,54 @@ def search_by_text(patches, text_query, device="cpu", batch_size=32):
 
 def run_analysis_pipeline(img, backbone, patch_sizes, strides, pca_dim=50):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    all_features, all_coords, all_patches_ref = [], [], []
     
-    all_features = []
-    all_coords = []
-    all_patches_ref = [] # Keep reference for CLIP
-    
-    # LOOP over sizes separately to avoid shape mismatch errors
     for ps, st in zip(patch_sizes, strides):
-        # 1. Extract
         p_curr, c_curr = extract_patches_single_size(img, ps, st)
         if not p_curr: continue
-        
-        # 2. Get Features (returns (N, D) array)
         f_curr = get_features(p_curr, backbone, device)
         
         all_features.append(f_curr)
         all_coords.extend(c_curr)
-        all_patches_ref.extend(p_curr) # Store patches
+        all_patches_ref.extend(p_curr)
     
-    if not all_features:
-        return None
+    if not all_features: return None
 
-    # Concatenate features from different patch sizes
     features = np.concatenate(all_features, axis=0)
     
-    # 3. PCA
     n_samples, n_dim = features.shape
     pca_n = min(pca_dim, n_samples, n_dim)
-    if pca_n > 1:
-        pca = PCA(n_components=pca_n)
-        features_reduced = pca.fit_transform(features)
-    else:
-        features_reduced = features
+    features_reduced = PCA(n_components=pca_n).fit_transform(features) if pca_n > 1 else features
     
-    # 4. Anomaly Detection (Isolation Forest)
     iso = IsolationForest(contamination=0.1, random_state=42, n_jobs=-1)
     iso.fit(features_reduced)
     score = normalize(-1 * iso.decision_function(features_reduced))
     
-    # 5. Embedding (UMAP) - Fallback if data is too small
     try:
         embedding = umap.UMAP(n_neighbors=15, min_dist=0.1, n_components=2).fit_transform(features_reduced)
     except:
-        embedding = np.zeros((len(features), 2))
-        if features_reduced.shape[1] >= 2:
-            embedding = features_reduced[:, :2]
+        embedding = features_reduced[:, :2]
 
     return {
         "features": features_reduced,
         "coords": all_coords,
-        "raw_patches": all_patches_ref, # Saved for Text Search
+        "raw_patches": all_patches_ref,
         "score": score,
         "scan_map": build_scan_map(img.shape, all_coords, score),
         "embedding": embedding,
         "device": str(device)
     }
 
-def train_classifier(features, coords, img_shape, pos_idx, neg_indices=None):
-    """Refines the heatmap using Logistic Regression (Active Learning)."""
-    # Safety check
+def train_classifier(features, coords, img_shape, pos_idx):
     if pos_idx >= len(features): return np.zeros(len(features)), np.zeros(img_shape)
 
     X_train = [features[pos_idx]]
     y_train = [1]
     
-    # Negative Mining
-    if not neg_indices:
-        import random
-        # Pick random indices that are NOT the positive one
-        candidates = list(range(len(features)))
-        candidates.remove(pos_idx)
-        neg_indices = random.sample(candidates, min(5, len(candidates)))
+    import random
+    candidates = list(range(len(features)))
+    candidates.remove(pos_idx)
+    neg_indices = random.sample(candidates, min(5, len(candidates)))
     
     for idx in neg_indices:
         X_train.append(features[idx])
@@ -213,239 +186,242 @@ def train_classifier(features, coords, img_shape, pos_idx, neg_indices=None):
         
     clf = LogisticRegression(class_weight='balanced', C=10.0, solver='lbfgs')
     clf.fit(X_train, y_train)
-    
     probs = clf.predict_proba(features)[:, 1]
     return normalize(probs), build_scan_map(img_shape, coords, probs)
 
 # -----------------------------------------------------------------------------
-# 2. STREAMLIT UI
+# 3. STREAMLIT UI STRUCTURE
 # -----------------------------------------------------------------------------
 
-st.set_page_config(page_title="DeepScan Pro", layout="wide", page_icon="🔬")
-st.title("🔬 DeepScan: Intelligent Microscopy")
+# Sidebar Navigation
+st.sidebar.title("🧬 Navigator")
+page_selection = st.sidebar.radio("Go to:", ["🚀 Main Application", "📘 The Math Behind It"])
 
-if "results" not in st.session_state: st.session_state.results = None
-if "img_cache" not in st.session_state: st.session_state.img_cache = None
-if "mode" not in st.session_state: st.session_state.mode = "Unsupervised"
-if "history" not in st.session_state: st.session_state.history = []
+# --- PAGE 1: MAIN APPLICATION ---
+if page_selection == "🚀 Main Application":
+    st.title("🔬 DeepScan Pro: Intelligent Microscopy")
 
-# --- SIDEBAR ---
-st.sidebar.header("1. Settings")
-uploaded = st.sidebar.file_uploader("Upload Image", type=["png", "jpg", "tif"])
+    # Initialize State
+    if "results" not in st.session_state: st.session_state.results = None
+    if "img_cache" not in st.session_state: st.session_state.img_cache = None
+    if "history" not in st.session_state: st.session_state.history = []
 
-# Updated Model Selection (RegNet, ConvNeXt, ResNet)
-backbone = st.sidebar.selectbox(
-    "Vision Backbone", 
-    ["regnet_y_400mf", "convnext_tiny", "resnet50"], 
-    index=1
-)
-
-# Advanced Utilities
-with st.sidebar.expander("Advanced Config"):
-    patch_size_input = st.multiselect("Patch Sizes", [32, 64, 128], default=[32, 64])
-    pca_dim = st.slider("PCA Dimensions", 10, 100, 50)
-    stride_val = st.slider("Overlap (Stride divisor)", 1, 4, 2, help="Higher = More overlap/slower")
-
-run_btn = st.sidebar.button("🚀 Run Analysis")
-
-if st.sidebar.button("Reset Session 🗑️"):
-    st.session_state.clear()
-    st.rerun()
-
-# --- MAIN EXECUTION ---
-if uploaded:
-    img_bytes = uploaded.getvalue()
-    img = load_image_grayscale(io.BytesIO(img_bytes))
+    # Sidebar Inputs
+    st.sidebar.header("1. Input & Settings")
+    uploaded = st.sidebar.file_uploader("Upload Image", type=["png", "jpg", "tif"])
     
-    # Reset if new image
-    if st.session_state.img_cache is None or not np.array_equal(img, st.session_state.img_cache):
+    # --- LOGIC: Load Uploaded OR Default ---
+    if uploaded:
+        img_bytes = uploaded.getvalue()
+        img = load_image_grayscale(io.BytesIO(img_bytes))
+        st.sidebar.success("✅ Custom Image Loaded")
+    elif st.session_state.img_cache is not None:
+        img = st.session_state.img_cache # Keep using what we have
+    else:
+        # Load Default Demo Image on Startup
+        img = get_default_image()
         st.session_state.img_cache = img
-        st.session_state.results = None
-        st.session_state.history = []
+        st.sidebar.info("ℹ️ Using Default Demo Image")
 
+    # Update cache if image changed
+    if st.session_state.img_cache is None or not np.array_equal(img, st.session_state.img_cache):
+         st.session_state.img_cache = img
+         st.session_state.results = None
+         st.session_state.history = []
+
+    # Settings
+    backbone = st.sidebar.selectbox("Vision Backbone", ["regnet_y_400mf", "convnext_tiny", "resnet50"], index=1)
+    
+    with st.sidebar.expander("🛠️ Advanced Config"):
+        patch_size_input = st.multiselect("Patch Sizes", [32, 64, 128], default=[32, 64])
+        stride_val = st.slider("Overlap (Stride divisor)", 1, 4, 2)
+        pca_dim = st.slider("PCA Dim", 10, 100, 50)
+
+    run_btn = st.sidebar.button("🚀 Run Analysis")
+    
+    if st.sidebar.button("Reset 🗑️"):
+        st.session_state.clear()
+        st.rerun()
+
+    # Execution
     if run_btn:
-        with st.spinner(f"Running analysis with {backbone}..."):
-            # Calculate strides dynamically
+        with st.spinner(f"Analyzing with {backbone}..."):
             strides = tuple([p // stride_val for p in patch_size_input])
-            
-            # Pass user-selected patch sizes and strides
-            res = run_analysis_pipeline(
-                img, backbone, tuple(patch_size_input), strides, pca_dim=pca_dim
-            )
-            
+            res = run_analysis_pipeline(img, backbone, tuple(patch_size_input), strides, pca_dim=pca_dim)
             if res:
                 st.session_state.results = res
                 st.session_state.current_score = res["score"]
                 st.session_state.current_map = res["scan_map"]
                 st.session_state.mode = "Unsupervised"
-                st.session_state.history.append(res["scan_map"]) # Save baseline
+                st.session_state.history.append(res["scan_map"])
             else:
-                st.error("Could not extract patches. Image might be too small.")
+                st.error("Image too small.")
 
-if st.session_state.results is not None:
-    res = st.session_state.results
-    img = st.session_state.img_cache
-    score = st.session_state.current_score
+    # Results Display
+    if st.session_state.results is not None:
+        res = st.session_state.results
+        score = st.session_state.current_score
+        
+        # Top 10 Regions
+        top_idx = np.argsort(score)[-10:][::-1]
+        top_regions = [{"rank": r+1, "id": i, "i": res["coords"][i][0], "j": res["coords"][i][1], "size": res["coords"][i][2]} for r, i in enumerate(top_idx)]
+
+        tab1, tab2, tab3 = st.tabs(["👁️ Visual Scan", "💬 Text Search", "📊 Efficiency Report"])
+
+        with tab1:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("Microscope View & Path")
+                fig, ax = plt.subplots(figsize=(6, 6))
+                ax.imshow(img, cmap="gray")
+                # Draw Path
+                path_y = [r["i"] + r["size"]//2 for r in top_regions]
+                path_x = [r["j"] + r["size"]//2 for r in top_regions]
+                ax.plot(path_x, path_y, 'r--', linewidth=1.5, alpha=0.8, label="Scan Path")
+                ax.scatter(path_x[0], path_y[0], c='lime', s=100, zorder=5, label="Start")
+                for r in top_regions:
+                    rect = mpatches.Rectangle((r["j"], r["i"]), r["size"], r["size"], linewidth=2, edgecolor="lime", facecolor="none")
+                    ax.add_patch(rect)
+                ax.legend(loc="lower right")
+                ax.axis("off")
+                st.pyplot(fig)
+
+            with c2:
+                st.subheader(f"Heatmap ({st.session_state.mode})")
+                fig, ax = plt.subplots(figsize=(6, 6))
+                ax.imshow(img, cmap="gray", alpha=0.4)
+                im = ax.imshow(st.session_state.current_map, cmap="jet", alpha=0.6)
+                ax.axis("off")
+                plt.colorbar(im, ax=ax)
+                st.pyplot(fig)
+            
+            st.divider()
+            
+            # Interactive Feedback
+            col_teach, col_plot = st.columns([1, 2])
+            with col_teach:
+                st.markdown("### 👨‍🏫 Teach the AI")
+                sel_rank = st.selectbox("Interesting Region:", [r["rank"] for r in top_regions])
+                target = next(r for r in top_regions if r["rank"] == sel_rank)
+                
+                if st.button("Find More Like This 🔍"):
+                    new_score, new_map = train_classifier(res["features"], res["coords"], img.shape, target["id"])
+                    st.session_state.current_score = new_score
+                    st.session_state.current_map = new_map
+                    st.session_state.mode = f"Supervised (Like #{sel_rank})"
+                    st.session_state.history.append(new_map)
+                    st.rerun()
+            
+            with col_plot:
+                # UMAP
+                embed_data = res["embedding"]
+                if embed_data.shape[0] == len(score):
+                    df = pd.DataFrame(embed_data, columns=["x", "y"])
+                    df["score"] = score
+                    df["size"] = 2
+                    if target["id"] < len(df): df.loc[target["id"], "size"] = 10
+                    fig = px.scatter(df, x="x", y="y", color="score", size="size", color_continuous_scale="Jet", title="Latent Feature Space")
+                    fig.update_layout(height=300, margin=dict(t=30, l=0, r=0, b=0))
+                    st.plotly_chart(fig, use_container_width=True)
+
+        with tab2:
+            st.markdown("### 🗣️ Semantic Search")
+            st.info("Type a query to search the image using Multimodal CLIP AI.")
+            query = st.text_input("Query:", placeholder="e.g. 'dark circular defects' or 'linear cracks'")
+            if st.button("Search 🔎"):
+                with st.spinner("CLIP is seeing the image..."):
+                    text_scores = search_by_text(res["raw_patches"], query)
+                    text_scores = normalize(text_scores)
+                    text_map = build_scan_map(img.shape, res["coords"], text_scores)
+                    st.session_state.current_score = text_scores
+                    st.session_state.current_map = text_map
+                    st.session_state.mode = f"Text: '{query}'"
+                    st.session_state.history.append(text_map)
+                    st.rerun()
+
+        with tab3:
+            st.markdown("### 📊 Efficiency Report")
+            
+            def calc_metrics(scan_map, t=10):
+                flat = np.sort(scan_map.flatten())[::-1]
+                total = flat.sum() + 1e-9
+                cutoff = int(len(flat) * (t/100))
+                return (flat[:cutoff].sum() / total) * 100
+
+            curr = st.session_state.current_map
+            eff_10 = calc_metrics(curr, 10)
+            
+            col_m1, col_m2, col_m3 = st.columns(3)
+            col_m1.metric("Signal @ 10% Scan", f"{eff_10:.1f}%", f"+{eff_10-10:.1f}%")
+            col_m2.metric("Steps Taken", len(st.session_state.history))
+            
+            x_vals = np.linspace(0, 100, 50)
+            y_vals = [calc_metrics(curr, x) for x in x_vals]
+            
+            fig, ax = plt.subplots(figsize=(8, 3))
+            ax.plot(x_vals, y_vals, 'r-', linewidth=2, label="AI Scan")
+            ax.plot(x_vals, x_vals, 'k--', alpha=0.3, label="Random")
+            ax.fill_between(x_vals, y_vals, x_vals, color='red', alpha=0.1)
+            ax.set_ylabel("% Anomalies Found")
+            ax.set_xlabel("% Time Spent")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            st.pyplot(fig)
+            
+            # Download
+            df_rep = pd.DataFrame({"Scan_Percentage": x_vals, "Signal_Captured": y_vals})
+            st.download_button("Download CSV 📄", df_rep.to_csv(index=False), "efficiency_report.csv", "text/csv")
+            
+    elif not uploaded and st.session_state.img_cache is None:
+         st.warning("⚠️ Loading demo image...")
+         st.rerun()
+
+# --- PAGE 2: THE MATH BEHIND IT ---
+elif page_selection == "📘 The Math Behind It":
+    st.title("📘 The Mathematics of DeepScan")
+    st.markdown("This application uses a pipeline of **Self-Supervised Learning** and **Active Learning**. Here is the mathematical foundation.")
     
-    # Helper to get Top K
-    k = 10
-    top_idx = np.argsort(score)[-k:][::-1]
-    top_regions = []
-    for r, idx in enumerate(top_idx):
-        i, j, s = res["coords"][idx]
-        top_regions.append({"rank": r+1, "id": idx, "i": i, "j": j, "size": s, "score": score[idx]})
+    st.header("1. Feature Extraction (RegNet/ConvNeXt)")
+    st.markdown(r"""
+    
 
-    # --- TABS FOR DIFFERENT MODES ---
-    tab1, tab2, tab3 = st.tabs(["👁️ Visual Scan", "💬 Text Search (CLIP)", "📊 Efficiency"])
+[Image of neural network convolution diagram]
 
-    # --- TAB 1: Visual & Teacher Mode ---
-    with tab1:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Microscope View & Path")
-            fig, ax = plt.subplots(figsize=(6, 6))
-            ax.imshow(img, cmap="gray")
-            
-            # Draw Path
-            path_y = [r["i"] + r["size"]//2 for r in top_regions]
-            path_x = [r["j"] + r["size"]//2 for r in top_regions]
-            ax.plot(path_x, path_y, 'r--', linewidth=1, alpha=0.7, label="Optimized Path")
-            ax.scatter(path_x[0], path_y[0], c='lime', s=80, zorder=5, label="Start")
-            
-            for r in top_regions:
-                rect = mpatches.Rectangle((r["j"], r["i"]), r["size"], r["size"], linewidth=2, edgecolor="lime", facecolor="none")
-                ax.add_patch(rect)
-                ax.text(r["j"], max(0, r["i"]-5), str(r["rank"]), color="lime", weight="bold")
-            
-            ax.legend(loc='lower right')
-            ax.axis("off")
-            st.pyplot(fig)
+    
+    We map an image patch $x \in \mathbb{R}^{H \times W}$ to a feature vector $z \in \mathbb{R}^d$ using a Convolutional Neural Network (CNN) $f_\theta$:
+    $$ z = f_\theta(x) $$
+    These features capture texture and geometry invariant to rotation or slight shifts.
+    """)
+    
+    st.divider()
+    
+    st.header("2. Anomaly Detection (Isolation Forest)")
+    st.markdown(r"""
+    
+    
+    To find interesting regions without labels, we use **Isolation Forests**. The core idea is that *anomalies are easier to isolate* (require fewer random cuts).
+    The anomaly score $s(x, n)$ for a sample $x$ in a dataset of size $n$ is:
+    
+    $$ s(x, n) = 2^{- \frac{E(h(x))}{c(n)}} $$
+    
+    Where:
+    * $h(x)$ is the path length (number of splits) to isolate sample $x$.
+    * $E(h(x))$ is the average path length across a forest of random trees.
+    * $c(n)$ is a normalization factor (average path length of a binary search tree).
+    
+    If $s(x, n) \to 1$, the sample is an **anomaly** (interesting).
+    If $s(x, n) \to 0.5$, the sample is **background** (boring).
+    """)
 
-        with c2:
-            st.subheader(f"Attention Map ({st.session_state.mode})")
-            fig, ax = plt.subplots(figsize=(6, 6))
-            ax.imshow(img, cmap="gray", alpha=0.4)
-            im = ax.imshow(st.session_state.current_map, cmap="jet", alpha=0.6)
-            ax.axis("off")
-            plt.colorbar(im, ax=ax)
-            st.pyplot(fig)
-        
-        st.divider()
-        st.markdown("#### 👆 Click-to-Teach (Teacher Mode)")
-        col_teach, col_plot = st.columns([1, 2])
-        
-        with col_teach:
-            sel_rank = st.selectbox("I found an interesting feature at Rank:", [r["rank"] for r in top_regions])
-            target = next(r for r in top_regions if r["rank"] == sel_rank)
-            
-            if st.button("Find More Like This 🔍"):
-                new_score, new_map = train_classifier(res["features"], res["coords"], img.shape, target["id"])
-                st.session_state.current_score = new_score
-                st.session_state.current_map = new_map
-                st.session_state.mode = f"Supervised (Like #{sel_rank})"
-                st.session_state.history.append(new_map) 
-                st.rerun()
+    st.divider()
 
-            if st.button("Reset Analysis 🔄"):
-                st.session_state.current_score = res["score"]
-                st.session_state.current_map = res["scan_map"]
-                st.session_state.mode = "Unsupervised"
-                if st.session_state.history:
-                    st.session_state.history = [st.session_state.history[0]]
-                st.rerun()
-                
-        with col_plot:
-            # UMAP Plot
-            embed_data = res["embedding"]
-            if embed_data.shape[0] != len(score):
-                st.warning("Embedding size mismatch.")
-            else:
-                df = pd.DataFrame(embed_data, columns=["x", "y"])
-                df["score"] = score
-                df["size"] = 2
-                if target["id"] < len(df):
-                    df.loc[target["id"], "size"] = 10
-                
-                fig = px.scatter(df, x="x", y="y", color="score", size="size", color_continuous_scale="Jet", title="Feature Space")
-                fig.update_layout(height=300, margin=dict(l=0,r=0,t=30,b=0))
-                st.plotly_chart(fig, use_container_width=True)
-
-    # --- TAB 2: Text Search ---
-    with tab2:
-        st.header("Search with Natural Language")
-        st.info("Describe what you want the microscope to find. (e.g. 'spherical particles', 'cracks', 'fibers')")
-        
-        query = st.text_input("Enter text query:", placeholder="e.g. 'dark circular defects'")
-        
-        if st.button("Search Text 🔍"):
-            with st.spinner("CLIP is reading the image..."):
-                text_scores = search_by_text(res["raw_patches"], query, device="cpu") # Run on CPU to save memory
-                text_scores = normalize(text_scores)
-                text_map = build_scan_map(img.shape, res["coords"], text_scores)
-                
-                st.session_state.current_score = text_scores
-                st.session_state.current_map = text_map
-                st.session_state.mode = f"Text Search: '{query}'"
-                st.session_state.history.append(text_map)
-                st.rerun()
-
-    # --- TAB 3: Efficiency Stats ---
-    with tab3:
-        st.header("📊 Simulated Efficiency Gains")
-        
-        # Logic for metrics
-        def calculate_metrics(scan_map, threshold=10):
-            flat = scan_map.flatten()
-            n = len(flat)
-            if n == 0: return 0
-            sorted_px = np.sort(flat)[::-1]
-            total_sig = sorted_px.sum()
-            if total_sig == 0: return 0
-            
-            # Signal captured at X% pixels
-            cutoff = int(n * (threshold / 100))
-            captured = sorted_px[:cutoff].sum()
-            return (captured / total_sig) * 100
-
-        latest_map = st.session_state.current_map
-        
-        m1, m2, m3 = st.columns(3)
-        
-        # 1. Signal at 10% Scan
-        sig_10 = calculate_metrics(latest_map, 10)
-        m1.metric("Signal Captured (10% Scan)", f"{sig_10:.1f}%", delta=f"{sig_10 - 10:.1f}% vs Random")
-        
-        # 2. Time to 80% Signal
-        flat = np.sort(latest_map.flatten())[::-1]
-        cum = np.cumsum(flat)
-        total = cum[-1] if len(cum) > 0 else 1
-        idx_80 = np.searchsorted(cum, 0.8 * total)
-        time_pct = (idx_80 / len(flat)) * 100 if len(flat) > 0 else 100
-        
-        m2.metric("Time to 80% Quality", f"{time_pct:.1f}%", delta=f"-{100-time_pct:.1f}% Time Saved")
-        
-        # 3. Improvement
-        m3.metric("Training Steps", len(st.session_state.history))
-
-        # Efficiency Curve
-        x_vals = np.linspace(0, 100, 50)
-        y_vals = [calculate_metrics(latest_map, x) for x in x_vals]
-        
-        fig_eff, ax_eff = plt.subplots(figsize=(10, 3))
-        ax_eff.plot(x_vals, y_vals, color="red", label="AI Adaptive Scan")
-        ax_eff.plot(x_vals, x_vals, color="gray", linestyle="--", label="Random Scan")
-        ax_eff.fill_between(x_vals, y_vals, x_vals, color="red", alpha=0.1)
-        ax_eff.set_ylabel("% Information Found")
-        ax_eff.set_xlabel("% Time Spent")
-        ax_eff.legend()
-        ax_eff.grid(True, alpha=0.3)
-        st.pyplot(fig_eff)
-        
-        # Utility: Download Report
-        st.divider()
-        report_df = pd.DataFrame({"Percentage_Scanned": x_vals, "Signal_Recovered": y_vals})
-        csv = report_df.to_csv(index=False).encode('utf-8')
-        st.download_button("Download Efficiency Report 📄", csv, "efficiency_report.csv", "text/csv")
-
-elif not uploaded:
-    st.info("👈 Please upload an image to start.")
+    st.header("3. Semantic Search (CLIP)")
+    st.markdown(r"""
+    
+    
+    For text search, we use **CLIP (Contrastive Language-Image Pre-training)**. It aligns image embeddings $I_f$ and text embeddings $T_f$ in a shared space by maximizing the cosine similarity for correct pairs:
+    
+    $$ \text{similarity}(I, T) = \frac{I_f \cdot T_f}{\|I_f\| \|T_f\|} $$
+    
+    The loss function minimizes the distance between the user's query ("defects") and the matching image patches.
+    """)
