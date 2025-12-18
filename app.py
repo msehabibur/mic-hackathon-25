@@ -67,22 +67,16 @@ def load_clip_model():
 @torch.no_grad()
 def get_features(patches, backbone_name, device, batch_size=32):
     """
-    Extracts features. Resizes all patches to 224x224 to keep the model happy.
+    Extracts features using timm models (RegNet, ConvNeXt, ResNet).
     """
     if not patches: return np.empty((0, 0))
 
-    # Load Vision Model
-    if "dino" in backbone_name:
-        try:
-            model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
-        except:
-            st.warning("⚠️ DINOv2 failed to load, using ResNet18.")
-            model = timm.create_model("resnet18", pretrained=True, num_classes=0)
-    else:
-        try:
-            model = timm.create_model(backbone_name, pretrained=True, num_classes=0)
-        except:
-            model = timm.create_model("resnet18", pretrained=True, num_classes=0)
+    try:
+        # Load model from timm
+        model = timm.create_model(backbone_name, pretrained=True, num_classes=0)
+    except Exception as e:
+        st.error(f"Error loading {backbone_name}: {e}")
+        return np.empty((0, 0))
 
     model = model.to(device).eval()
     
@@ -91,7 +85,7 @@ def get_features(patches, backbone_name, device, batch_size=32):
     for i in range(0, len(patches), batch_size):
         batch_list = patches[i:i+batch_size]
         
-        # 1. Stack numpy arrays (They are guaranteed to be same size now)
+        # 1. Stack numpy arrays
         batch_np = np.stack(batch_list, axis=0)
         
         # 2. Convert to Torch (B, 1, H, W) -> Repeat to RGB (B, 3, H, W)
@@ -102,13 +96,7 @@ def get_features(patches, backbone_name, device, batch_size=32):
         x = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
 
         output = model(x)
-        
-        # Handle DINO vs ResNet output formats
-        if isinstance(output, dict):
-            f = output['x_norm_clstoken'].detach().cpu().numpy()
-        else:
-            f = output.detach().cpu().numpy()
-            
+        f = output.detach().cpu().numpy()
         feats.append(f)
         
     return np.concatenate(feats, axis=0) if feats else np.empty((0,0))
@@ -244,8 +232,25 @@ if "history" not in st.session_state: st.session_state.history = []
 # --- SIDEBAR ---
 st.sidebar.header("1. Settings")
 uploaded = st.sidebar.file_uploader("Upload Image", type=["png", "jpg", "tif"])
-backbone = st.sidebar.selectbox("Vision Backbone", ["resnet18", "dinov2_vits14 (Meta AI)"], index=1)
+
+# Updated Model Selection (RegNet, ConvNeXt, ResNet)
+backbone = st.sidebar.selectbox(
+    "Vision Backbone", 
+    ["regnet_y_400mf", "convnext_tiny", "resnet50"], 
+    index=1
+)
+
+# Advanced Utilities
+with st.sidebar.expander("Advanced Config"):
+    patch_size_input = st.multiselect("Patch Sizes", [32, 64, 128], default=[32, 64])
+    pca_dim = st.slider("PCA Dimensions", 10, 100, 50)
+    stride_val = st.slider("Overlap (Stride divisor)", 1, 4, 2, help="Higher = More overlap/slower")
+
 run_btn = st.sidebar.button("🚀 Run Analysis")
+
+if st.sidebar.button("Reset Session 🗑️"):
+    st.session_state.clear()
+    st.rerun()
 
 # --- MAIN EXECUTION ---
 if uploaded:
@@ -260,11 +265,13 @@ if uploaded:
 
     if run_btn:
         with st.spinner(f"Running analysis with {backbone}..."):
-            # Map selection to actual model name
-            model_name = "dinov2_vits14" if "dino" in backbone else backbone
+            # Calculate strides dynamically
+            strides = tuple([p // stride_val for p in patch_size_input])
             
-            # Pass patch sizes as tuple
-            res = run_analysis_pipeline(img, model_name, (32, 64), (16, 32))
+            # Pass user-selected patch sizes and strides
+            res = run_analysis_pipeline(
+                img, backbone, tuple(patch_size_input), strides, pca_dim=pca_dim
+            )
             
             if res:
                 st.session_state.results = res
@@ -339,7 +346,7 @@ if st.session_state.results is not None:
                 st.session_state.history.append(new_map) 
                 st.rerun()
 
-            if st.button("Reset 🔄"):
+            if st.button("Reset Analysis 🔄"):
                 st.session_state.current_score = res["score"]
                 st.session_state.current_map = res["scan_map"]
                 st.session_state.mode = "Unsupervised"
@@ -359,8 +366,8 @@ if st.session_state.results is not None:
                 if target["id"] < len(df):
                     df.loc[target["id"], "size"] = 10
                 
-                fig = px.scatter(df, x="x", y="y", color="score", size="size", color_continuous_scale="Jet")
-                fig.update_layout(height=300, margin=dict(l=0,r=0,t=0,b=0))
+                fig = px.scatter(df, x="x", y="y", color="score", size="size", color_continuous_scale="Jet", title="Feature Space")
+                fig.update_layout(height=300, margin=dict(l=0,r=0,t=30,b=0))
                 st.plotly_chart(fig, use_container_width=True)
 
     # --- TAB 2: Text Search ---
@@ -433,6 +440,12 @@ if st.session_state.results is not None:
         ax_eff.legend()
         ax_eff.grid(True, alpha=0.3)
         st.pyplot(fig_eff)
+        
+        # Utility: Download Report
+        st.divider()
+        report_df = pd.DataFrame({"Percentage_Scanned": x_vals, "Signal_Recovered": y_vals})
+        csv = report_df.to_csv(index=False).encode('utf-8')
+        st.download_button("Download Efficiency Report 📄", csv, "efficiency_report.csv", "text/csv")
 
 elif not uploaded:
     st.info("👈 Please upload an image to start.")
