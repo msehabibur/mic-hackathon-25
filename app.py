@@ -1,5 +1,7 @@
 import io
 import os
+import json
+import time
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -46,7 +48,6 @@ def load_image_grayscale(file_or_path) -> np.ndarray:
         return np.zeros((256, 256), dtype=np.float32)
 
 def get_default_image() -> np.ndarray:
-    """Checks for 'STEM_example' in root, otherwise uses fallback."""
     possible_names = ["STEM_example.png", "STEM_example.jpg", "STEM_example.tif"]
     for fname in possible_names:
         if os.path.exists(fname):
@@ -76,7 +77,6 @@ def extract_patches_single_size(img, patch_size, stride):
             coords.append((i, j, patch_size))
     return patches, coords
 
-# --- CACHED MODEL LOADING ---
 @st.cache_resource
 def load_clip_model():
     model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
@@ -204,10 +204,29 @@ page_selection = st.sidebar.radio("Go to:", ["🚀 Main Application", "📘 The 
 # --- PAGE 1: MAIN APPLICATION ---
 if page_selection == "🚀 Main Application":
     st.title("🔬 DeepScan Pro: Intelligent Microscopy")
-
+    
+    # Initialize State
     if "results" not in st.session_state: st.session_state.results = None
     if "img_cache" not in st.session_state: st.session_state.img_cache = None
     if "history" not in st.session_state: st.session_state.history = []
+    if "connected" not in st.session_state: st.session_state.connected = False
+
+    # --- HARDWARE CONNECTION MOCK ---
+    st.sidebar.divider()
+    st.sidebar.subheader("Hardware Status")
+    if not st.session_state.connected:
+        st.sidebar.error("🔴 Disconnected")
+        if st.sidebar.button("🔌 Connect Microscope"):
+            with st.spinner("Handshaking with Controller..."):
+                time.sleep(1.0)
+            st.session_state.connected = True
+            st.rerun()
+    else:
+        st.sidebar.success("🟢 Connected (STEM-v3)")
+        if st.sidebar.button("❌ Disconnect"):
+            st.session_state.connected = False
+            st.rerun()
+    st.sidebar.divider()
 
     st.sidebar.header("1. Input & Settings")
     uploaded = st.sidebar.file_uploader("Upload Image", type=["png", "jpg", "tif"])
@@ -230,7 +249,6 @@ if page_selection == "🚀 Main Application":
 
     backbone = st.sidebar.selectbox("Vision Backbone", ["regnet_y_400mf", "convnext_tiny", "resnet50"], index=1)
     
-    # NEW: Scale Calibration
     with st.sidebar.expander("📏 Calibration (Physical Units)"):
         nm_per_pixel = st.number_input("Scale (nm per pixel)", value=1.0, min_value=0.01, format="%.2f")
         st.caption(f"100 pixels = {100*nm_per_pixel:.1f} nm")
@@ -266,7 +284,6 @@ if page_selection == "🚀 Main Application":
         top_idx = np.argsort(score)[-10:][::-1]
         top_regions = [{"rank": r+1, "id": i, "i": res["coords"][i][0], "j": res["coords"][i][1], "size": res["coords"][i][2]} for r, i in enumerate(top_idx)]
 
-        # Updated Tabs: Added Quantification
         tab1, tab2, tab3, tab4 = st.tabs(["👁️ Visual Scan", "📏 Quantification", "💬 Text Search", "📊 Efficiency"])
 
         with tab1:
@@ -285,6 +302,17 @@ if page_selection == "🚀 Main Application":
                 ax.legend(loc="lower right")
                 ax.axis("off")
                 st.pyplot(fig)
+                
+                # PROTOCOL DOWNLOAD with BALLOONS
+                protocol_data = {
+                    "timestamp": "2023-10-27T10:00:00",
+                    "scale_nm": nm_per_pixel,
+                    "scan_points": [{"x": int(r['j']), "y": int(r['i']), "priority": int(r['rank'])} for r in top_regions]
+                }
+                if st.download_button("💾 Download Scan Protocol (.json)", json.dumps(protocol_data, indent=2), "scan_protocol.json", "application/json"):
+                    st.balloons()
+                    st.success("Protocol exported successfully!")
+
 
             with c2:
                 st.subheader(f"Heatmap ({st.session_state.mode})")
@@ -295,8 +323,17 @@ if page_selection == "🚀 Main Application":
                 plt.colorbar(im, ax=ax)
                 st.pyplot(fig)
             
+            # --- DEFECT GALLERY (NEW) ---
             st.divider()
-            
+            st.subheader("🔍 Identified Anomalies (Zoomed Views)")
+            cols = st.columns(5)
+            for idx, col in enumerate(cols):
+                if idx < 5 and idx < len(top_regions):
+                    r = top_regions[idx]
+                    patch_img = img[r['i']:r['i']+r['size'], r['j']:r['j']+r['size']]
+                    col.image(patch_img, caption=f"Rank #{r['rank']}", use_column_width=True, clamp=True)
+            st.divider()
+
             col_teach, col_plot = st.columns([1, 2])
             with col_teach:
                 st.markdown("### 👨‍🏫 Teach the AI")
@@ -329,8 +366,6 @@ if page_selection == "🚀 Main Application":
             c_thresh, c_metrics = st.columns([1, 1])
             with c_thresh:
                 threshold = st.slider("Anomaly Confidence Threshold", 0.0, 1.0, 0.6, 0.05)
-                
-                # Binarize Map
                 binary_map = st.session_state.current_map > threshold
                 labels = measure.label(binary_map)
                 n_features = labels.max()
@@ -344,16 +379,12 @@ if page_selection == "🚀 Main Application":
                 
             with c_metrics:
                 st.metric("Detected Features", int(n_features))
-                
-                # Calculate physical area
                 total_pixels = binary_map.sum()
                 area_nm2 = total_pixels * (nm_per_pixel ** 2)
-                
                 if area_nm2 > 1000:
                     st.metric("Total Defect Area", f"{area_nm2/1000:.2f} µm²")
                 else:
                     st.metric("Total Defect Area", f"{area_nm2:.1f} nm²")
-                    
                 st.metric("Coverage", f"{(total_pixels / binary_map.size)*100:.1f}% of surface")
 
         with tab3:
@@ -398,8 +429,9 @@ if page_selection == "🚀 Main Application":
             st.pyplot(fig)
             
             df_rep = pd.DataFrame({"Scan_Percentage": x_vals, "Signal_Captured": y_vals})
-            st.download_button("Download CSV 📄", df_rep.to_csv(index=False), "efficiency_report.csv", "text/csv")
-            
+            if st.download_button("Download CSV 📄", df_rep.to_csv(index=False), "efficiency_report.csv", "text/csv"):
+                st.balloons()
+
     elif not uploaded and st.session_state.img_cache is None:
          st.warning("⚠️ Loading demo image...")
          st.rerun()
@@ -416,6 +448,10 @@ elif page_selection == "📘 The Math Behind It":
 
     st.header("1. Sliding Window & Feature Extraction")
     st.markdown("""
+    
+
+[Image of neural network convolution diagram]
+
     The high-resolution microscope image $I$ is essentially a massive matrix of pixels. 
     We cannot process it all at once, so we decompose it into small overlapping patches $p_{i,j}$.
     
@@ -449,6 +485,7 @@ elif page_selection == "📘 The Math Behind It":
 
     st.header("3. Unsupervised Anomaly Detection (Isolation Forest)")
     st.markdown("""
+    
     How do we know what is "interesting" without any labels? We assume that **rare** things are interesting.
     We use an **Isolation Forest**, which builds random decision trees.
     
