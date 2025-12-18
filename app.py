@@ -6,7 +6,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import plotly.express as px
-import plotly.graph_objects as go
 import torch
 import timm
 import umap
@@ -44,18 +43,14 @@ def load_image_grayscale(file_or_path) -> np.ndarray:
         if denom < 1e-12: return np.zeros_like(img, dtype=np.float32)
         return (img - img.min()) / denom
     except Exception as e:
-        # st.error(f"Error loading image: {e}")
         return np.zeros((256, 256), dtype=np.float32)
 
 def get_default_image() -> np.ndarray:
     """Checks for 'STEM_example' in root, otherwise uses fallback."""
-    # Priority 1: Check for local file in root
-    possible_names = ["STEM_example.png", "STEM_example.jpg", "STEM_example.tif", "STEM_example.jpeg"]
+    possible_names = ["STEM_example.png", "STEM_example.jpg", "STEM_example.tif"]
     for fname in possible_names:
         if os.path.exists(fname):
             return load_image_grayscale(fname)
-    
-    # Priority 2: Fallback to scientific sample if file missing
     return util.img_as_float(data.brick())
 
 def normalize(x: np.ndarray) -> np.ndarray:
@@ -203,7 +198,6 @@ def train_classifier(features, coords, img_shape, pos_idx):
 # 3. STREAMLIT UI STRUCTURE
 # -----------------------------------------------------------------------------
 
-# Sidebar Navigation
 st.sidebar.title("🧬 Navigator")
 page_selection = st.sidebar.radio("Go to:", ["🚀 Main Application", "📘 The Math Behind It"])
 
@@ -211,35 +205,29 @@ page_selection = st.sidebar.radio("Go to:", ["🚀 Main Application", "📘 The 
 if page_selection == "🚀 Main Application":
     st.title("🔬 DeepScan Pro: Intelligent Microscopy")
 
-    # Initialize State
     if "results" not in st.session_state: st.session_state.results = None
     if "img_cache" not in st.session_state: st.session_state.img_cache = None
     if "history" not in st.session_state: st.session_state.history = []
 
-    # Sidebar Inputs
     st.sidebar.header("1. Input & Settings")
     uploaded = st.sidebar.file_uploader("Upload Image", type=["png", "jpg", "tif"])
     
-    # --- LOGIC: Load Uploaded OR Default ---
     if uploaded:
         img_bytes = uploaded.getvalue()
         img = load_image_grayscale(io.BytesIO(img_bytes))
         st.sidebar.success("✅ Custom Image Loaded")
     elif st.session_state.img_cache is not None:
-        img = st.session_state.img_cache # Keep using what we have
+        img = st.session_state.img_cache 
     else:
-        # Load Default Demo Image on Startup
         img = get_default_image()
         st.session_state.img_cache = img
         st.sidebar.info("ℹ️ Loaded Default STEM_example")
 
-    # Update cache if image changed
     if st.session_state.img_cache is None or not np.array_equal(img, st.session_state.img_cache):
          st.session_state.img_cache = img
          st.session_state.results = None
          st.session_state.history = []
 
-    # Settings
     backbone = st.sidebar.selectbox("Vision Backbone", ["regnet_y_400mf", "convnext_tiny", "resnet50"], index=1)
     
     with st.sidebar.expander("🛠️ Advanced Config"):
@@ -253,7 +241,6 @@ if page_selection == "🚀 Main Application":
         st.session_state.clear()
         st.rerun()
 
-    # Execution
     if run_btn:
         with st.spinner(f"Analyzing with {backbone}..."):
             strides = tuple([p // stride_val for p in patch_size_input])
@@ -267,12 +254,10 @@ if page_selection == "🚀 Main Application":
             else:
                 st.error("Image too small.")
 
-    # Results Display
     if st.session_state.results is not None:
         res = st.session_state.results
         score = st.session_state.current_score
         
-        # Top 10 Regions
         top_idx = np.argsort(score)[-10:][::-1]
         top_regions = [{"rank": r+1, "id": i, "i": res["coords"][i][0], "j": res["coords"][i][1], "size": res["coords"][i][2]} for r, i in enumerate(top_idx)]
 
@@ -284,7 +269,6 @@ if page_selection == "🚀 Main Application":
                 st.subheader("Microscope View & Path")
                 fig, ax = plt.subplots(figsize=(6, 6))
                 ax.imshow(img, cmap="gray")
-                # Draw Path
                 path_y = [r["i"] + r["size"]//2 for r in top_regions]
                 path_x = [r["j"] + r["size"]//2 for r in top_regions]
                 ax.plot(path_x, path_y, 'r--', linewidth=1.5, alpha=0.8, label="Scan Path")
@@ -297,15 +281,17 @@ if page_selection == "🚀 Main Application":
                 st.pyplot(fig)
 
             with c2:
-                st.subheader(f"3D Topography ({st.session_state.mode})")
-                # NEW: 3D Surface Plot for the "Wow" factor
-                fig_3d = go.Figure(data=[go.Surface(z=st.session_state.current_map, colorscale='Jet')])
-                fig_3d.update_layout(title='Anomaly Landscape', autosize=False, width=400, height=400, margin=dict(l=0, r=0, b=0, t=30))
-                st.plotly_chart(fig_3d, use_container_width=True)
+                # REVERTED TO 2D HEATMAP AS REQUESTED
+                st.subheader(f"Heatmap ({st.session_state.mode})")
+                fig, ax = plt.subplots(figsize=(6, 6))
+                ax.imshow(img, cmap="gray", alpha=0.4)
+                im = ax.imshow(st.session_state.current_map, cmap="jet", alpha=0.6)
+                ax.axis("off")
+                plt.colorbar(im, ax=ax)
+                st.pyplot(fig)
             
             st.divider()
             
-            # Interactive Feedback
             col_teach, col_plot = st.columns([1, 2])
             with col_teach:
                 st.markdown("### 👨‍🏫 Teach the AI")
@@ -321,7 +307,6 @@ if page_selection == "🚀 Main Application":
                     st.rerun()
             
             with col_plot:
-                # UMAP
                 embed_data = res["embedding"]
                 if embed_data.shape[0] == len(score):
                     df = pd.DataFrame(embed_data, columns=["x", "y"])
@@ -349,7 +334,6 @@ if page_selection == "🚀 Main Application":
 
         with tab3:
             st.markdown("### 📊 Efficiency Report")
-            
             def calc_metrics(scan_map, t=10):
                 flat = np.sort(scan_map.flatten())[::-1]
                 total = flat.sum() + 1e-9
@@ -358,14 +342,12 @@ if page_selection == "🚀 Main Application":
 
             curr = st.session_state.current_map
             eff_10 = calc_metrics(curr, 10)
-            
             col_m1, col_m2, col_m3 = st.columns(3)
             col_m1.metric("Signal @ 10% Scan", f"{eff_10:.1f}%", f"+{eff_10-10:.1f}%")
             col_m2.metric("Steps Taken", len(st.session_state.history))
             
             x_vals = np.linspace(0, 100, 50)
             y_vals = [calc_metrics(curr, x) for x in x_vals]
-            
             fig, ax = plt.subplots(figsize=(8, 3))
             ax.plot(x_vals, y_vals, 'r-', linewidth=2, label="AI Scan")
             ax.plot(x_vals, x_vals, 'k--', alpha=0.3, label="Random")
@@ -376,49 +358,99 @@ if page_selection == "🚀 Main Application":
             ax.grid(True, alpha=0.3)
             st.pyplot(fig)
             
-            # Download
             df_rep = pd.DataFrame({"Scan_Percentage": x_vals, "Signal_Captured": y_vals})
             st.download_button("Download CSV 📄", df_rep.to_csv(index=False), "efficiency_report.csv", "text/csv")
             
     elif not uploaded and st.session_state.img_cache is None:
-         # This block handles the first load if no image is in cache
-         # It will trigger the "Input & Settings" logic above to load default
          st.warning("⚠️ Loading demo image...")
          st.rerun()
 
-# --- PAGE 2: THE MATH BEHIND IT ---
+# --- PAGE 2: THE MATH BEHIND IT (EXPANDED) ---
 elif page_selection == "📘 The Math Behind It":
-    st.title("📘 The Mathematics of DeepScan")
-    st.markdown("This application uses a pipeline of **Self-Supervised Learning** and **Active Learning**. Here is the mathematical foundation.")
-    
-    st.header("1. Feature Extraction (RegNet/ConvNeXt)")
-    st.markdown("We map an image patch $x \\in \\mathbb{R}^{H \\times W}$ to a feature vector $z \\in \\mathbb{R}^d$ using a Convolutional Neural Network (CNN) $f_\\theta$:")
-    st.latex(r"z = f_\theta(x)")
-    st.markdown("These features capture texture and geometry invariant to rotation or slight shifts.")
+    st.title("📘 The Science of DeepScan")
+    st.markdown("""
+    This platform transforms a microscope into an intelligent agent using a pipeline of **Computer Vision**, 
+    **Dimensionality Reduction**, and **Active Learning**. Here is the deep technical breakdown.
+    """)
     
     st.divider()
-    
-    st.header("2. Anomaly Detection (Isolation Forest)")
-    st.markdown("To find interesting regions without labels, we use **Isolation Forests**. The core idea is that *anomalies are easier to isolate* (require fewer random cuts).")
-    st.markdown("The anomaly score $s(x, n)$ for a sample $x$ in a dataset of size $n$ is:")
-    
-    st.latex(r"s(x, n) = 2^{- \frac{E(h(x))}{c(n)}}")
-    
+
+    st.header("1. Sliding Window & Feature Extraction")
     st.markdown("""
-    Where:
-    * $h(x)$ is the path length (number of splits) to isolate sample $x$.
-    * $E(h(x))$ is the average path length across a forest of random trees.
-    * $c(n)$ is a normalization factor (average path length of a binary search tree).
+    The high-resolution microscope image $I$ is essentially a massive matrix of pixels. 
+    We cannot process it all at once, so we decompose it into small overlapping patches $p_{i,j}$.
     
-    If $s(x, n) \\to 1$, the sample is an **anomaly** (interesting).
-    If $s(x, n) \\to 0.5$, the sample is **background** (boring).
+    **The Neural Backbone:**
+    We use **RegNet** or **ConvNeXt**, which are modern Convolutional Neural Networks (CNNs).
+    Unlike standard pixel analysis, these networks extract *semantic features*.
+    
+    Mathematically, for a patch $x$, the network outputs a high-dimensional vector $z$:
+    """)
+    st.latex(r"z = f_{\theta}(x) \in \mathbb{R}^{1024}")
+    st.markdown("""
+    This vector $z$ is invariant to small rotations and noise, capturing the "essence" (texture, shape) of the patch.
     """)
 
     st.divider()
 
-    st.header("3. Semantic Search (CLIP)")
-    st.markdown("For text search, we use **CLIP (Contrastive Language-Image Pre-training)**. It aligns image embeddings $I_f$ and text embeddings $T_f$ in a shared space by maximizing the cosine similarity for correct pairs:")
+    st.header("2. Dimensionality Reduction (PCA)")
+    st.markdown("""
+    The raw feature vectors are too large (e.g., 1024 dimensions) and contain redundant information. 
+    We use **Principal Component Analysis (PCA)** to project them into a lower-dimensional space (e.g., 50 dimensions) 
+    that preserves the maximum variance.
     
-    st.latex(r"\text{similarity}(I, T) = \frac{I_f \cdot T_f}{\|I_f\| \|T_f\|}")
+    We find a projection matrix $W$ by solving the eigenvalue problem for the covariance matrix $C$:
+    """)
+    st.latex(r"C = \frac{1}{n} \sum_{i=1}^{n} (z_i - \bar{z})(z_i - \bar{z})^T")
+    st.markdown("""
+    We select the top $k$ eigenvectors corresponding to the largest eigenvalues. This compresses the data while keeping the signal.
+    """)
+
+    st.divider()
+
+    st.header("3. Unsupervised Anomaly Detection (Isolation Forest)")
+    st.markdown("""
+    How do we know what is "interesting" without any labels? We assume that **rare** things are interesting.
+    We use an **Isolation Forest**, which builds random decision trees.
     
-    st.markdown("The loss function minimizes the distance between the user's query ('defects') and the matching image patches.")
+    * **Common patches (Background):** Require many splits to isolate (Deep in the tree).
+    * **Rare patches (Defects):** Require few splits to isolate (Shallow in the tree).
+    
+    The anomaly score is defined as:
+    """)
+    st.latex(r"s(x, n) = 2^{- \frac{E(h(x))}{c(n)}}")
+    st.markdown("""
+    * $h(x)$: Path length to isolate sample $x$.
+    * $c(n)$: Average path length of a binary search tree (Normalization).
+    
+    Scores close to 1 indicate high anomaly (high priority for scanning).
+    """)
+
+    st.divider()
+
+    st.header("4. Active Learning (Teacher Mode)")
+    st.markdown("""
+    When you click "Find More Like This", you turn the system into a **Supervised** learner. 
+    We train a **Logistic Regression** classifier on the fly using your selected patch as a *Positive* example ($y=1$) 
+    and random background patches as *Negative* examples ($y=0$).
+    
+    The model learns weights $w$ to maximize the likelihood:
+    """)
+    st.latex(r"P(y=1|z) = \frac{1}{1 + e^{-(w^T z + b)}}")
+    st.markdown("""
+    This probability map becomes the new scanning priority, effectively "teaching" the microscope what you care about in milliseconds.
+    """)
+
+    st.divider()
+
+    st.header("5. Multimodal Search (CLIP)")
+    st.markdown("""
+    To allow text search (e.g., "find cracks"), we use **CLIP (Contrastive Language-Image Pre-training)**.
+    CLIP maps both *Images* and *Text* into the same vector space.
+    
+    We calculate the **Cosine Similarity** between your text query vector $T$ and every image patch vector $I$:
+    """)
+    st.latex(r"\text{Sim}(T, I) = \frac{T \cdot I}{\|T\| \|I\|}")
+    st.markdown("""
+    High similarity means the image patch "looks like" the text description.
+    """)
