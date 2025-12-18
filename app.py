@@ -14,7 +14,7 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import IsolationForest
 from sklearn.linear_model import LogisticRegression
 import torch.nn.functional as F
-from skimage import data, util 
+from skimage import data, util, measure 
 from transformers import CLIPProcessor, CLIPModel
 
 # -----------------------------------------------------------------------------
@@ -230,6 +230,11 @@ if page_selection == "🚀 Main Application":
 
     backbone = st.sidebar.selectbox("Vision Backbone", ["regnet_y_400mf", "convnext_tiny", "resnet50"], index=1)
     
+    # NEW: Scale Calibration
+    with st.sidebar.expander("📏 Calibration (Physical Units)"):
+        nm_per_pixel = st.number_input("Scale (nm per pixel)", value=1.0, min_value=0.01, format="%.2f")
+        st.caption(f"100 pixels = {100*nm_per_pixel:.1f} nm")
+        
     with st.sidebar.expander("🛠️ Advanced Config"):
         patch_size_input = st.multiselect("Patch Sizes", [32, 64, 128], default=[32, 64])
         stride_val = st.slider("Overlap (Stride divisor)", 1, 4, 2)
@@ -261,7 +266,8 @@ if page_selection == "🚀 Main Application":
         top_idx = np.argsort(score)[-10:][::-1]
         top_regions = [{"rank": r+1, "id": i, "i": res["coords"][i][0], "j": res["coords"][i][1], "size": res["coords"][i][2]} for r, i in enumerate(top_idx)]
 
-        tab1, tab2, tab3 = st.tabs(["👁️ Visual Scan", "💬 Text Search", "📊 Efficiency Report"])
+        # Updated Tabs: Added Quantification
+        tab1, tab2, tab3, tab4 = st.tabs(["👁️ Visual Scan", "📏 Quantification", "💬 Text Search", "📊 Efficiency"])
 
         with tab1:
             c1, c2 = st.columns(2)
@@ -281,7 +287,6 @@ if page_selection == "🚀 Main Application":
                 st.pyplot(fig)
 
             with c2:
-                # REVERTED TO 2D HEATMAP AS REQUESTED
                 st.subheader(f"Heatmap ({st.session_state.mode})")
                 fig, ax = plt.subplots(figsize=(6, 6))
                 ax.imshow(img, cmap="gray", alpha=0.4)
@@ -318,6 +323,40 @@ if page_selection == "🚀 Main Application":
                     st.plotly_chart(fig, use_container_width=True)
 
         with tab2:
+            st.markdown("### 📏 Defect Quantification")
+            st.info("Set a threshold to automatically count and measure defects.")
+            
+            c_thresh, c_metrics = st.columns([1, 1])
+            with c_thresh:
+                threshold = st.slider("Anomaly Confidence Threshold", 0.0, 1.0, 0.6, 0.05)
+                
+                # Binarize Map
+                binary_map = st.session_state.current_map > threshold
+                labels = measure.label(binary_map)
+                n_features = labels.max()
+                
+                fig, ax = plt.subplots(figsize=(5, 5))
+                ax.imshow(img, cmap="gray", alpha=0.6)
+                ax.imshow(binary_map, cmap="Reds", alpha=0.5)
+                ax.axis("off")
+                ax.set_title(f"Detected Regions (> {threshold})")
+                st.pyplot(fig)
+                
+            with c_metrics:
+                st.metric("Detected Features", int(n_features))
+                
+                # Calculate physical area
+                total_pixels = binary_map.sum()
+                area_nm2 = total_pixels * (nm_per_pixel ** 2)
+                
+                if area_nm2 > 1000:
+                    st.metric("Total Defect Area", f"{area_nm2/1000:.2f} µm²")
+                else:
+                    st.metric("Total Defect Area", f"{area_nm2:.1f} nm²")
+                    
+                st.metric("Coverage", f"{(total_pixels / binary_map.size)*100:.1f}% of surface")
+
+        with tab3:
             st.markdown("### 🗣️ Semantic Search")
             st.info("Type a query to search the image using Multimodal CLIP AI.")
             query = st.text_input("Query:", placeholder="e.g. 'dark circular defects' or 'linear cracks'")
@@ -332,7 +371,7 @@ if page_selection == "🚀 Main Application":
                     st.session_state.history.append(text_map)
                     st.rerun()
 
-        with tab3:
+        with tab4:
             st.markdown("### 📊 Efficiency Report")
             def calc_metrics(scan_map, t=10):
                 flat = np.sort(scan_map.flatten())[::-1]
@@ -439,18 +478,4 @@ elif page_selection == "📘 The Math Behind It":
     st.latex(r"P(y=1|z) = \frac{1}{1 + e^{-(w^T z + b)}}")
     st.markdown("""
     This probability map becomes the new scanning priority, effectively "teaching" the microscope what you care about in milliseconds.
-    """)
-
-    st.divider()
-
-    st.header("5. Multimodal Search (CLIP)")
-    st.markdown("""
-    To allow text search (e.g., "find cracks"), we use **CLIP (Contrastive Language-Image Pre-training)**.
-    CLIP maps both *Images* and *Text* into the same vector space.
-    
-    We calculate the **Cosine Similarity** between your text query vector $T$ and every image patch vector $I$:
-    """)
-    st.latex(r"\text{Sim}(T, I) = \frac{T \cdot I}{\|T\| \|I\|}")
-    st.markdown("""
-    High similarity means the image patch "looks like" the text description.
     """)
