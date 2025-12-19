@@ -134,7 +134,7 @@ def main():
             """)
 
         if os.path.exists("workflow.png"):
-            st.image("workflow.png", caption="Figure 1: The Active Learning Architecture.", use_container_width=True)
+            st.image("workflow.png", caption="Figure 1: The Active Learning Architecture.", width=700)
         else:
             st.warning("⚠️ Diagram missing.")
 
