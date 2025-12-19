@@ -51,7 +51,7 @@ def main():
     if "mode" not in st.session_state: st.session_state.mode = "Unsupervised"
     if "logs" not in st.session_state: st.session_state.logs = [] 
 
-    st.title("🔬 DeepScan Pro v7")
+    st.title("🔬 DeepScan Pro")
     st.write("An Active Learning Pipeline for Intelligent Atomic Microscopy")
 
     # --- Sidebar for all user configurations ---
