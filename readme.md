@@ -1,5 +1,8 @@
 # 🔬 DeepScan Pro: Intelligent Microscopy Agent
 
+<img width="2816" height="1536" alt="image" src="https://github.com/user-attachments/assets/93825ade-7fcc-4a4d-9d67-2ad8f4c1b751" />
+
+
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://deepscanpro.streamlit.app/)
 
 > **An Active Learning pipeline that turns passive microscopes into intelligent discovery agents.**
