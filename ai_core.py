@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ai_core.py: Core AI logic for DeepScan Pro.
-Handles Neural Network feature extraction, Anomaly Detection, and CLIP search.
+ai_core.py: The core AI engine.
+Contains logic for Feature Extraction, Anomaly Detection, and Active Learning.
 """
 import torch
 import timm
@@ -15,18 +15,29 @@ from sklearn.linear_model import LogisticRegression
 import torch.nn.functional as F
 from PIL import Image
 from transformers import CLIPProcessor, CLIPModel
-from utils import build_scan_map, normalize, extract_patches_single_size
+from utils import build_scan_map
 
+# --- Helper for Patch Extraction ---
+def extract_patches_single_size(img, patch_size, stride):
+    patches, coords = [], []
+    H, W = img.shape
+    for i in range(0, H - patch_size + 1, stride):
+        for j in range(0, W - patch_size + 1, stride):
+            patches.append(img[i:i+patch_size, j:j+patch_size])
+            coords.append((i, j, patch_size))
+    return patches, coords
+
+# --- Model Loading ---
 @st.cache_resource
 def load_clip_model():
-    """Loads CLIP model for text search."""
+    """Loads CLIP model for text-to-image search."""
     model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
     processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     return model, processor
 
 @torch.no_grad()
 def get_features(patches, backbone_name, device, batch_size=32):
-    """Extracts semantic features using RegNet/ConvNeXt/ResNet."""
+    """Runs patches through a Vision Transformer or CNN."""
     if not patches: return np.empty((0, 0))
 
     try:
@@ -52,8 +63,9 @@ def get_features(patches, backbone_name, device, batch_size=32):
         
     return np.concatenate(feats, axis=0) if feats else np.empty((0,0))
 
+# --- Main Pipelines ---
 def run_analysis_pipeline(img, backbone, patch_sizes, strides, pca_dim=50):
-    """Runs the full Unsupervised Anomaly Detection pipeline."""
+    """Orchestrates the Unsupervised Anomaly Detection workflow."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     all_features, all_coords, all_patches_ref = [], [], []
     
@@ -61,7 +73,6 @@ def run_analysis_pipeline(img, backbone, patch_sizes, strides, pca_dim=50):
         p_curr, c_curr = extract_patches_single_size(img, ps, st)
         if not p_curr: continue
         f_curr = get_features(p_curr, backbone, device)
-        
         all_features.append(f_curr)
         all_coords.extend(c_curr)
         all_patches_ref.extend(p_curr)
@@ -70,17 +81,19 @@ def run_analysis_pipeline(img, backbone, patch_sizes, strides, pca_dim=50):
 
     features = np.concatenate(all_features, axis=0)
     
-    # PCA Reduction
+    # Dimensionality Reduction
     n_samples, n_dim = features.shape
     pca_n = min(pca_dim, n_samples, n_dim)
     features_reduced = PCA(n_components=pca_n).fit_transform(features) if pca_n > 1 else features
     
-    # Isolation Forest
+    # Anomaly Detection
     iso = IsolationForest(contamination=0.1, random_state=42, n_jobs=-1)
     iso.fit(features_reduced)
-    score = normalize(-1 * iso.decision_function(features_reduced))
+    raw_scores = -1 * iso.decision_function(features_reduced)
+    mn, mx = raw_scores.min(), raw_scores.max()
+    score = (raw_scores - mn) / (mx - mn) if mx > mn else np.zeros_like(raw_scores)
     
-    # UMAP Embedding
+    # Visualization Embedding (UMAP)
     try:
         embedding = umap.UMAP(n_neighbors=15, min_dist=0.1, n_components=2).fit_transform(features_reduced)
     except:
@@ -97,7 +110,7 @@ def run_analysis_pipeline(img, backbone, patch_sizes, strides, pca_dim=50):
     }
 
 def train_classifier(features, coords, img_shape, pos_idx):
-    """Active Learning: Trains a lightweight classifier on user feedback."""
+    """Active Learning: Trains a classifier based on user selection."""
     if pos_idx >= len(features): return np.zeros(len(features)), np.zeros(img_shape)
 
     X_train = [features[pos_idx]]
@@ -115,11 +128,15 @@ def train_classifier(features, coords, img_shape, pos_idx):
     clf = LogisticRegression(class_weight='balanced', C=10.0, solver='lbfgs')
     clf.fit(X_train, y_train)
     probs = clf.predict_proba(features)[:, 1]
-    return normalize(probs), build_scan_map(img_shape, coords, probs)
+    
+    mn, mx = probs.min(), probs.max()
+    probs = (probs - mn) / (mx - mn) if mx > mn else np.zeros_like(probs)
+    
+    return probs, build_scan_map(img_shape, coords, probs)
 
 @torch.no_grad()
 def search_by_text(patches, text_query, img_shape, coords, device="cpu", batch_size=32):
-    """CLIP-based Semantic Search."""
+    """Performs Semantic Search using CLIP."""
     model, processor = load_clip_model()
     model = model.to(device)
     
@@ -140,6 +157,9 @@ def search_by_text(patches, text_query, img_shape, coords, device="cpu", batch_s
         batch_scores = (img_features @ text_features.T).squeeze(1).cpu().numpy()
         scores.append(batch_scores)
 
-    text_scores = normalize(np.concatenate(scores))
+    raw_scores = np.concatenate(scores)
+    mn, mx = raw_scores.min(), raw_scores.max()
+    text_scores = (raw_scores - mn) / (mx - mn) if mx > mn else np.zeros_like(raw_scores)
+    
     text_map = build_scan_map(img_shape, coords, text_scores)
     return text_scores, text_map
