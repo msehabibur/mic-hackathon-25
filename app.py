@@ -20,8 +20,8 @@ from skimage import measure
 
 # Import configuration and modules
 from config import PAGE_CONFIG, AVAILABLE_MODELS, DEFAULT_PATCH_SIZES, DEFAULT_PCA_DIM, HARDWARE_NAME
-from utils import load_image_grayscale, get_default_image
-from ai_core import run_analysis_pipeline, train_classifier, search_by_text
+from utils import load_image_grayscale, get_default_image, normalize
+from ai_core import run_analysis_pipeline, train_classifier, search_by_text, compute_fft_metrics
 
 # =====================================================================================
 # Helper: System Logger
@@ -31,7 +31,6 @@ def log_message(msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
     entry = f"[{timestamp}] {msg}"
     st.session_state.logs.append(entry)
-    # Keep only last 10 logs
     if len(st.session_state.logs) > 10:
         st.session_state.logs.pop(0)
 
@@ -132,34 +131,26 @@ def main():
             **Md Habibur Rahman** *School of Materials Engineering, Purdue University, West Lafayette, IN 47907, USA* *rahma103@purdue.edu*
             """)
         
-        # --- WORKFLOW IMAGE INTEGRATION ---
         if os.path.exists("workflow.png"):
             st.image("workflow.png", caption="Figure 1: The DeepScan Pro Active Learning Architecture.", use_container_width=True)
         else:
             st.warning("⚠️ workflow.png not found. Please upload it to the app folder.")
-        # ----------------------------------
 
         st.info("This application implements a sophisticated, multi-stage pipeline to turn passive images into active scanning protocols.", icon="🔬")
         
         st.markdown("---")
 
         with st.expander("📚 **Stage 1: Feature Extraction**", expanded=True):
-            st.markdown("""
-            We map an image patch $x$ to a semantic vector $z$ using modern CNNs.
-            $$ z = f_{\\theta}(x) \in \mathbb{R}^{1024} $$
-            """)
+            st.markdown("We map an image patch $x$ to a semantic vector $z$ using modern CNNs.")
+            st.latex(r"z = f_{\theta}(x) \in \mathbb{R}^{1024}")
 
         with st.expander("🤖 **Stage 2: Unsupervised Anomaly Detection**", expanded=True):
-            st.markdown("""
-            We use **Isolation Forests** to find rare events in the feature space.
-            $$ s(x, n) = 2^{- \\frac{E(h(x))}{c(n)}} $$
-            """)
+            st.markdown("We use **Isolation Forests** to find rare events in the feature space.")
+            st.latex(r"s(x, n) = 2^{- \frac{E(h(x))}{c(n)}}")
 
         with st.expander("✨ **Stage 3: Active Learning (Teacher Mode)**", expanded=True):
-            st.markdown("""
-            When you click "Find More Like This", we train a Logistic Regression classifier on the fly.
-            $$ P(y=1|z) = \\frac{1}{1 + e^{-(w^T z + b)}} $$
-            """)
+            st.markdown("We train a Logistic Regression classifier on the fly based on user feedback.")
+            st.latex(r"P(y=1|z) = \frac{1}{1 + e^{-(w^T z + b)}}")
 
     # --- TAB 2: Visual Scan (Main Action) ---
     with tab_run:
@@ -258,13 +249,27 @@ def main():
             
             st.divider()
 
-            # Teacher Mode
+            # --- Teacher Mode (WITH FFT PHYSICS) ---
             c_teach, c_plot = st.columns([1, 2])
             with c_teach:
                 st.subheader("👨‍🏫 Teacher Mode")
                 sel_rank = st.selectbox("Select Interesting Region:", [r["rank"] for r in top_regions])
                 target = next(r for r in top_regions if r["rank"] == sel_rank)
                 
+                # FFT Analysis
+                target_patch = img[target['i']:target['i']+target['size'], target['j']:target['j']+target['size']]
+                fft_mag, crystal_score = compute_fft_metrics(target_patch)
+                
+                st.write("**Physics Check (FFT):**")
+                c_fft1, c_fft2 = st.columns(2)
+                c_fft1.image(target_patch, caption="Real Space", use_column_width=True, clamp=True)
+                c_fft2.image(normalize(fft_mag), caption="Reciprocal Space", use_column_width=True, clamp=True)
+                
+                if crystal_score > 50:
+                    st.success(f"💎 Crystalline (Score: {crystal_score:.1f})")
+                else:
+                    st.warning(f"☁️ Amorphous/Defect (Score: {crystal_score:.1f})")
+
                 if st.button("Find More Like This 🔍"):
                     log_message(f"Training active learner on Region #{sel_rank}...")
                     new_score, new_map = train_classifier(res["features"], res["coords"], img.shape, target["id"])
