@@ -2,11 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 config.py: Configuration settings for the DeepScan Pro application.
-Stores constants, model names, and default parameters.
+Stores constants, model names, default parameters, and hardware simulation settings.
 """
+from pathlib import Path
 
+# Page configuration
 PAGE_CONFIG = {
-    "page_title": "DeepScan Pro: Intelligent Microscopy",
+    "page_title": "DeepScan Pro v7",
     "page_icon": "🔬",
     "layout": "wide",
     "initial_sidebar_state": "expanded"
