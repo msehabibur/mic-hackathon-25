@@ -2,9 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 app.py: The main Streamlit user interface for the DeepScan Pro application.
-Includes Live Simulation and System Logging for a "Real-Time" feel.
+This script handles the UI layout, user inputs, and calls the appropriate
+workflow functions from the `ai_core` module.
 """
 import io
+import os
 import json
 import time
 from datetime import datetime
@@ -48,9 +50,9 @@ def main():
     if "current_score" not in st.session_state: st.session_state.current_score = None
     if "current_map" not in st.session_state: st.session_state.current_map = None
     if "mode" not in st.session_state: st.session_state.mode = "Unsupervised"
-    if "logs" not in st.session_state: st.session_state.logs = [] # NEW: System Logs
+    if "logs" not in st.session_state: st.session_state.logs = [] 
 
-    st.title("🔬 DeepScan Pro")
+    st.title("🔬 DeepScan Pro v7")
     st.write("An Active Learning Pipeline for Intelligent Atomic Microscopy")
 
     # --- Sidebar for all user configurations ---
@@ -74,7 +76,7 @@ def main():
                 st.session_state.connected = False
                 st.rerun()
 
-        # NEW: System Logs Console
+        # System Logs Console
         st.divider()
         st.subheader("📟 System Logs")
         log_text = "\n".join(st.session_state.logs)
@@ -129,6 +131,14 @@ def main():
             st.markdown("""
             **Md Habibur Rahman** *School of Materials Engineering, Purdue University, West Lafayette, IN 47907, USA* *rahma103@purdue.edu*
             """)
+        
+        # --- WORKFLOW IMAGE INTEGRATION ---
+        if os.path.exists("workflow.png"):
+            st.image("workflow.png", caption="Figure 1: The DeepScan Pro Active Learning Architecture.", use_container_width=True)
+        else:
+            st.warning("⚠️ workflow.png not found. Please upload it to the app folder.")
+        # ----------------------------------
+
         st.info("This application implements a sophisticated, multi-stage pipeline to turn passive images into active scanning protocols.", icon="🔬")
         
         st.markdown("---")
@@ -177,13 +187,12 @@ def main():
             top_idx = np.argsort(score)[-10:][::-1]
             top_regions = [{"rank": r+1, "id": i, "i": res["coords"][i][0], "j": res["coords"][i][1], "size": res["coords"][i][2]} for r, i in enumerate(top_idx)]
 
-            # --- NEW: Simulation Controls ---
+            # --- Simulation Controls ---
             c_sim, c_view = st.columns([1, 3])
             with c_sim:
                 st.markdown("### 🎮 Control")
                 if st.button("▶️ Simulate Live Scan"):
                     log_message("Starting live scan simulation...")
-                    # Simulation Loop
                     placeholder = c_view.empty()
                     for step in range(1, len(top_regions) + 1):
                         current_regions = top_regions[:step]
@@ -191,13 +200,11 @@ def main():
                         fig, ax = plt.subplots(figsize=(6, 6))
                         ax.imshow(img, cmap="gray")
                         
-                        # Draw Path So Far
                         if len(current_regions) > 1:
                             py = [r["i"] + r["size"]//2 for r in current_regions]
                             px_coords = [r["j"] + r["size"]//2 for r in current_regions]
                             ax.plot(px_coords, py, 'r--', linewidth=2, alpha=0.8)
                         
-                        # Draw Current Box
                         last_r = current_regions[-1]
                         rect = mpatches.Rectangle((last_r["j"], last_r["i"]), last_r["size"], last_r["size"], linewidth=3, edgecolor="lime", facecolor="none")
                         ax.add_patch(rect)
@@ -207,28 +214,25 @@ def main():
                         
                         placeholder.pyplot(fig)
                         plt.close(fig)
-                        time.sleep(0.5) # Animation speed
+                        time.sleep(0.5)
                     
                     log_message("Scan simulation completed.")
                     st.rerun()
 
-            # --- Static View (After Simulation) ---
+            # --- Static View ---
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("Microscope View")
                 fig, ax = plt.subplots(figsize=(6, 6))
                 ax.imshow(img, cmap="gray")
-                
                 path_y = [r["i"] + r["size"]//2 for r in top_regions]
                 path_x = [r["j"] + r["size"]//2 for r in top_regions]
                 ax.plot(path_x, path_y, 'r--', linewidth=1.5, alpha=0.8)
                 ax.scatter(path_x[0], path_y[0], c='lime', s=100, zorder=5)
-                
                 for r in top_regions:
                     rect = mpatches.Rectangle((r["j"], r["i"]), r["size"], r["size"], linewidth=2, edgecolor="lime", facecolor="none")
                     ax.add_patch(rect)
                     ax.text(r["j"], max(0, r["i"]-5), str(r["rank"]), color="lime", fontsize=12, weight="bold")
-                
                 ax.axis("off")
                 st.pyplot(fig)
 
@@ -326,8 +330,6 @@ def main():
         st.header("📊 Efficiency Report")
         if st.session_state.current_map is not None:
             curr = st.session_state.current_map
-            
-            # Efficiency Calculation
             flat = np.sort(curr.flatten())[::-1]
             total_sig = flat.sum() + 1e-9
             
