@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 app.py: The main Streamlit user interface for the DeepScan Pro application.
-This script handles the UI layout, user inputs, and calls the appropriate
-workflow functions from the `ai_core` module.
+Includes Live Simulation and System Logging for a "Real-Time" feel.
 """
 import io
 import json
 import time
+from datetime import datetime
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -20,6 +20,18 @@ from skimage import measure
 from config import PAGE_CONFIG, AVAILABLE_MODELS, DEFAULT_PATCH_SIZES, DEFAULT_PCA_DIM, HARDWARE_NAME
 from utils import load_image_grayscale, get_default_image
 from ai_core import run_analysis_pipeline, train_classifier, search_by_text
+
+# =====================================================================================
+# Helper: System Logger
+# =====================================================================================
+def log_message(msg):
+    """Adds a timestamped message to the session logs."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    entry = f"[{timestamp}] {msg}"
+    st.session_state.logs.append(entry)
+    # Keep only last 10 logs
+    if len(st.session_state.logs) > 10:
+        st.session_state.logs.pop(0)
 
 # =====================================================================================
 # Main Streamlit Application UI
@@ -36,6 +48,7 @@ def main():
     if "current_score" not in st.session_state: st.session_state.current_score = None
     if "current_map" not in st.session_state: st.session_state.current_map = None
     if "mode" not in st.session_state: st.session_state.mode = "Unsupervised"
+    if "logs" not in st.session_state: st.session_state.logs = [] # NEW: System Logs
 
     st.title("🔬 DeepScan Pro v7")
     st.write("An Active Learning Pipeline for Intelligent Atomic Microscopy")
@@ -50,15 +63,22 @@ def main():
             st.error("🔴 Disconnected")
             if st.button("Connect Microscope"):
                 with st.spinner("Handshaking with Controller..."):
-                    time.sleep(1.0)
+                    time.sleep(0.8)
+                    log_message(f"Connected to {HARDWARE_NAME}")
                 st.session_state.connected = True
                 st.rerun()
         else:
             st.success(f"🟢 Connected ({HARDWARE_NAME})")
             if st.button("Disconnect"):
+                log_message("Disconnected from hardware.")
                 st.session_state.connected = False
                 st.rerun()
 
+        # NEW: System Logs Console
+        st.divider()
+        st.subheader("📟 System Logs")
+        log_text = "\n".join(st.session_state.logs)
+        st.text_area("Console Output", value=log_text, height=150, disabled=True)
         st.divider()
 
         # Input Data
@@ -80,6 +100,7 @@ def main():
             st.session_state.img_cache = img
             st.session_state.results = None
             st.session_state.history = []
+            log_message("New image loaded into memory.")
 
         # Model Params
         st.subheader("🤖 AI Model")
@@ -101,7 +122,7 @@ def main():
     # --- Main Application Tabs ---
     tab_about, tab_run, tab_quant, tab_analytics = st.tabs(["💡 How It Works", "1️⃣ Visual Scan", "2️⃣ Quantification & Search", "📊 Analytics"])
 
-    # --- TAB 1: How It Works (The BandgapMiner Style) ---
+    # --- TAB 1: How It Works ---
     with tab_about:
         st.header("How DeepScan Works: From Pixels to Protocols")
         with st.container(border=True):
@@ -115,45 +136,27 @@ def main():
         with st.expander("📚 **Stage 1: Feature Extraction**", expanded=True):
             st.markdown("""
             We map an image patch $x$ to a semantic vector $z$ using modern CNNs.
-            
             $$ z = f_{\\theta}(x) \in \mathbb{R}^{1024} $$
-            
-            Unlike standard pixel analysis, these networks extract texture and geometry invariant to rotation.
             """)
 
         with st.expander("🤖 **Stage 2: Unsupervised Anomaly Detection**", expanded=True):
             st.markdown("""
             We use **Isolation Forests** to find rare events in the feature space.
-            
             $$ s(x, n) = 2^{- \\frac{E(h(x))}{c(n)}} $$
-            
-            If $s \\to 1$, the sample is an **anomaly** (interesting). If $s \\to 0.5$, it is background.
             """)
 
         with st.expander("✨ **Stage 3: Active Learning (Teacher Mode)**", expanded=True):
             st.markdown("""
             When you click "Find More Like This", we train a Logistic Regression classifier on the fly.
-            
             $$ P(y=1|z) = \\frac{1}{1 + e^{-(w^T z + b)}} $$
-            
-            This allows the microscope to learn your specific scientific interests in milliseconds.
             """)
-        
-        st.markdown("---")
-        st.header("Why Active Learning is Superior")
-        st.markdown("""
-        | Feature | 📷 Passive Scanning | 🚀 Active Learning (DeepScan) |
-        | :--- | :--- | :--- |
-        | **Speed** | Slow (Scans 100% of area) | Fast (Scans <10% of area) |
-        | **Focus** | Blind Raster | Context-Aware Priority |
-        | **Output** | Heavy Image File | Machine-Readable Protocol |
-        """)
 
     # --- TAB 2: Visual Scan (Main Action) ---
     with tab_run:
         st.header("🚀 AI-Powered Analysis")
         
         if st.button("✨ Run Full Analysis", type="primary"):
+            log_message(f"Starting analysis with {backbone}...")
             with st.spinner(f"Analyzing with {backbone}..."):
                 strides = tuple([p // stride_val for p in patch_size_input])
                 res = run_analysis_pipeline(img, backbone, tuple(patch_size_input), strides, pca_dim=pca_dim)
@@ -163,6 +166,7 @@ def main():
                     st.session_state.current_map = res["scan_map"]
                     st.session_state.mode = "Unsupervised"
                     st.session_state.history.append(res["scan_map"])
+                    log_message("Analysis complete. Anomaly map generated.")
                 else:
                     st.error("Image too small.")
 
@@ -170,23 +174,56 @@ def main():
             res = st.session_state.results
             score = st.session_state.current_score
             
-            # Calculate Top Regions
             top_idx = np.argsort(score)[-10:][::-1]
             top_regions = [{"rank": r+1, "id": i, "i": res["coords"][i][0], "j": res["coords"][i][1], "size": res["coords"][i][2]} for r, i in enumerate(top_idx)]
 
+            # --- NEW: Simulation Controls ---
+            c_sim, c_view = st.columns([1, 3])
+            with c_sim:
+                st.markdown("### 🎮 Control")
+                if st.button("▶️ Simulate Live Scan"):
+                    log_message("Starting live scan simulation...")
+                    # Simulation Loop
+                    placeholder = c_view.empty()
+                    for step in range(1, len(top_regions) + 1):
+                        current_regions = top_regions[:step]
+                        
+                        fig, ax = plt.subplots(figsize=(6, 6))
+                        ax.imshow(img, cmap="gray")
+                        
+                        # Draw Path So Far
+                        if len(current_regions) > 1:
+                            py = [r["i"] + r["size"]//2 for r in current_regions]
+                            px_coords = [r["j"] + r["size"]//2 for r in current_regions]
+                            ax.plot(px_coords, py, 'r--', linewidth=2, alpha=0.8)
+                        
+                        # Draw Current Box
+                        last_r = current_regions[-1]
+                        rect = mpatches.Rectangle((last_r["j"], last_r["i"]), last_r["size"], last_r["size"], linewidth=3, edgecolor="lime", facecolor="none")
+                        ax.add_patch(rect)
+                        ax.text(last_r["j"], max(0, last_r["i"]-5), str(last_r["rank"]), color="lime", fontsize=14, weight="bold")
+                        ax.axis("off")
+                        ax.set_title(f"Scanning Region #{last_r['rank']}...", color="lime")
+                        
+                        placeholder.pyplot(fig)
+                        plt.close(fig)
+                        time.sleep(0.5) # Animation speed
+                    
+                    log_message("Scan simulation completed.")
+                    st.rerun()
+
+            # --- Static View (After Simulation) ---
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("Microscope View")
                 fig, ax = plt.subplots(figsize=(6, 6))
                 ax.imshow(img, cmap="gray")
                 
-                # Draw Path
                 path_y = [r["i"] + r["size"]//2 for r in top_regions]
                 path_x = [r["j"] + r["size"]//2 for r in top_regions]
                 ax.plot(path_x, path_y, 'r--', linewidth=1.5, alpha=0.8)
                 ax.scatter(path_x[0], path_y[0], c='lime', s=100, zorder=5)
                 
-                # Draw Boxes and Numbers (Restored)
                 for r in top_regions:
                     rect = mpatches.Rectangle((r["j"], r["i"]), r["size"], r["size"], linewidth=2, edgecolor="lime", facecolor="none")
                     ax.add_patch(rect)
@@ -225,11 +262,13 @@ def main():
                 target = next(r for r in top_regions if r["rank"] == sel_rank)
                 
                 if st.button("Find More Like This 🔍"):
+                    log_message(f"Training active learner on Region #{sel_rank}...")
                     new_score, new_map = train_classifier(res["features"], res["coords"], img.shape, target["id"])
                     st.session_state.current_score = new_score
                     st.session_state.current_map = new_map
                     st.session_state.mode = f"Supervised (Like #{sel_rank})"
                     st.session_state.history.append(new_map)
+                    log_message("Model updated. Priority map refreshed.")
                     st.rerun()
 
             with c_plot:
@@ -272,6 +311,7 @@ def main():
             query = st.text_input("Query:", placeholder="e.g. 'linear cracks'")
             if st.button("Search"):
                 if st.session_state.results:
+                    log_message(f"Searching for: '{query}'")
                     res = st.session_state.results
                     with st.spinner("CLIP is searching..."):
                         text_scores, text_map = search_by_text(res["raw_patches"], query, img.shape, res["coords"])
@@ -283,7 +323,7 @@ def main():
 
     # --- TAB 4: Analytics ---
     with tab_analytics:
-        st.header("📊 Analytics Dashboard")
+        st.header("📊 Efficiency Report")
         if st.session_state.current_map is not None:
             curr = st.session_state.current_map
             
@@ -321,6 +361,7 @@ def main():
                     protocol = {"timestamp": "2025-12-18", "points": top_regions}
                     if st.download_button("Download Hardware Protocol (.json)", json.dumps(protocol, indent=2), "protocol.json", "application/json"):
                         st.balloons()
+                        log_message("Protocol exported to controller.")
 
 if __name__ == "__main__":
     main()
