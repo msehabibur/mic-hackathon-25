@@ -33,6 +33,15 @@ def get_default_image() -> np.ndarray:
             return load_image_grayscale(fname)
     return util.img_as_float(data.brick())
 
+def normalize(x: np.ndarray) -> np.ndarray:
+    """
+    Normalizes a numpy array to the 0.0 - 1.0 range.
+    """
+    x = x.astype(np.float32)
+    mn, mx = float(x.min()), float(x.max())
+    if mx - mn < 1e-8: return np.zeros_like(x)
+    return (x - mn) / (mx - mn)
+
 def build_scan_map(img_shape, coords, score):
     """
     Reconstructs the 2D heatmap from patch-level anomaly scores.
