@@ -1,6 +1,5 @@
 # 🔬 DeepScan Pro: Intelligent Microscopy Agent
 
-> **Winner of [Hackathon Name] (Optional Placeholder)**
 > An Active Learning pipeline that turns passive microscopes into intelligent discovery agents.
 
 ## 🚀 The Problem
