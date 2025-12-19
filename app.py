@@ -2,8 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 app.py: The main Streamlit user interface for the DeepScan Pro application.
-This script handles the UI layout, user inputs, and calls the appropriate
-workflow functions from the `ai_core` module.
 """
 import io
 import os
@@ -20,7 +18,7 @@ from skimage import measure
 
 # Import configuration and modules
 from config import PAGE_CONFIG, AVAILABLE_MODELS, DEFAULT_PATCH_SIZES, DEFAULT_PCA_DIM, HARDWARE_NAME
-from utils import load_image_grayscale, get_default_image, normalize
+from utils import load_image_grayscale, get_default_image
 from ai_core import run_analysis_pipeline, train_classifier, search_by_text, compute_fft_metrics
 
 # =====================================================================================
@@ -51,14 +49,13 @@ def main():
     if "mode" not in st.session_state: st.session_state.mode = "Unsupervised"
     if "logs" not in st.session_state: st.session_state.logs = [] 
 
-    st.title("🔬 DeepScan Pro")
+    st.title("🔬 DeepScan Pro v7")
     st.write("An Active Learning Pipeline for Intelligent Atomic Microscopy")
 
-    # --- Sidebar for all user configurations ---
+    # --- Sidebar ---
     with st.sidebar:
         st.header("⚙️ Configuration")
         
-        # Hardware Mock
         st.subheader("🔌 Hardware Status")
         if not st.session_state.connected:
             st.error("🔴 Disconnected")
@@ -75,14 +72,12 @@ def main():
                 st.session_state.connected = False
                 st.rerun()
 
-        # System Logs Console
         st.divider()
         st.subheader("📟 System Logs")
         log_text = "\n".join(st.session_state.logs)
         st.text_area("Console Output", value=log_text, height=150, disabled=True)
         st.divider()
 
-        # Input Data
         st.subheader("🖼️ Input Data")
         uploaded = st.file_uploader("Upload Image", type=["png", "jpg", "tif"])
         
@@ -103,7 +98,6 @@ def main():
             st.session_state.history = []
             log_message("New image loaded into memory.")
 
-        # Model Params
         st.subheader("🤖 AI Model")
         backbone = st.selectbox("Vision Backbone", AVAILABLE_MODELS, index=1)
 
@@ -120,39 +114,23 @@ def main():
             st.session_state.clear()
             st.rerun()
 
-    # --- Main Application Tabs ---
+    # --- Tabs ---
     tab_about, tab_run, tab_quant, tab_analytics = st.tabs(["💡 How It Works", "1️⃣ Visual Scan", "2️⃣ Quantification & Search", "📊 Analytics"])
 
     # --- TAB 1: How It Works ---
     with tab_about:
         st.header("How DeepScan Works: From Pixels to Protocols")
         with st.container(border=True):
-            st.markdown("""
-            **Md Habibur Rahman** *School of Materials Engineering, Purdue University, West Lafayette, IN 47907, USA* *rahma103@purdue.edu*
-            """)
+            st.markdown("**Md Habibur Rahman** *School of Materials Engineering, Purdue University*")
         
         if os.path.exists("workflow.png"):
-            st.image("workflow.png", caption="Figure 1: The DeepScan Pro Active Learning Architecture.", use_container_width=True)
+            st.image("workflow.png", caption="Figure 1: The DeepScan Pro Architecture.", use_container_width=True)
         else:
-            st.warning("⚠️ workflow.png not found. Please upload it to the app folder.")
+            st.warning("⚠️ workflow.png not found.")
 
-        st.info("This application implements a sophisticated, multi-stage pipeline to turn passive images into active scanning protocols.", icon="🔬")
-        
-        st.markdown("---")
+        st.info("This application implements a multi-stage pipeline to turn passive images into active scanning protocols.")
 
-        with st.expander("📚 **Stage 1: Feature Extraction**", expanded=True):
-            st.markdown("We map an image patch $x$ to a semantic vector $z$ using modern CNNs.")
-            st.latex(r"z = f_{\theta}(x) \in \mathbb{R}^{1024}")
-
-        with st.expander("🤖 **Stage 2: Unsupervised Anomaly Detection**", expanded=True):
-            st.markdown("We use **Isolation Forests** to find rare events in the feature space.")
-            st.latex(r"s(x, n) = 2^{- \frac{E(h(x))}{c(n)}}")
-
-        with st.expander("✨ **Stage 3: Active Learning (Teacher Mode)**", expanded=True):
-            st.markdown("We train a Logistic Regression classifier on the fly based on user feedback.")
-            st.latex(r"P(y=1|z) = \frac{1}{1 + e^{-(w^T z + b)}}")
-
-    # --- TAB 2: Visual Scan (Main Action) ---
+    # --- TAB 2: Visual Scan ---
     with tab_run:
         st.header("🚀 AI-Powered Analysis")
         
@@ -167,7 +145,7 @@ def main():
                     st.session_state.current_map = res["scan_map"]
                     st.session_state.mode = "Unsupervised"
                     st.session_state.history.append(res["scan_map"])
-                    log_message("Analysis complete. Anomaly map generated.")
+                    log_message("Analysis complete.")
                 else:
                     st.error("Image too small.")
 
@@ -178,7 +156,7 @@ def main():
             top_idx = np.argsort(score)[-10:][::-1]
             top_regions = [{"rank": r+1, "id": i, "i": res["coords"][i][0], "j": res["coords"][i][1], "size": res["coords"][i][2]} for r, i in enumerate(top_idx)]
 
-            # --- Simulation Controls ---
+            # --- Simulation ---
             c_sim, c_view = st.columns([1, 3])
             with c_sim:
                 st.markdown("### 🎮 Control")
@@ -191,15 +169,20 @@ def main():
                         fig, ax = plt.subplots(figsize=(6, 6))
                         ax.imshow(img, cmap="gray")
                         
+                        # Draw Path
                         if len(current_regions) > 1:
                             py = [r["i"] + r["size"]//2 for r in current_regions]
                             px_coords = [r["j"] + r["size"]//2 for r in current_regions]
-                            ax.plot(px_coords, py, 'r--', linewidth=2, alpha=0.8)
+                            ax.plot(px_coords, py, 'r--', linewidth=2, alpha=0.8, label="Optimized Path")
                         
+                        # Draw Boxes
                         last_r = current_regions[-1]
                         rect = mpatches.Rectangle((last_r["j"], last_r["i"]), last_r["size"], last_r["size"], linewidth=3, edgecolor="lime", facecolor="none")
                         ax.add_patch(rect)
+                        
+                        # Draw Text Label
                         ax.text(last_r["j"], max(0, last_r["i"]-5), str(last_r["rank"]), color="lime", fontsize=14, weight="bold")
+                        
                         ax.axis("off")
                         ax.set_title(f"Scanning Region #{last_r['rank']}...", color="lime")
                         
@@ -210,20 +193,27 @@ def main():
                     log_message("Scan simulation completed.")
                     st.rerun()
 
-            # --- Static View ---
+            # --- Static View (FIXED: Added Labels Back) ---
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("Microscope View")
                 fig, ax = plt.subplots(figsize=(6, 6))
                 ax.imshow(img, cmap="gray")
+                
                 path_y = [r["i"] + r["size"]//2 for r in top_regions]
                 path_x = [r["j"] + r["size"]//2 for r in top_regions]
-                ax.plot(path_x, path_y, 'r--', linewidth=1.5, alpha=0.8)
-                ax.scatter(path_x[0], path_y[0], c='lime', s=100, zorder=5)
+                
+                # FIXED: Added labels for the legend
+                ax.plot(path_x, path_y, 'r--', linewidth=1.5, alpha=0.8, label="Optimized Path")
+                ax.scatter(path_x[0], path_y[0], c='lime', s=100, zorder=5, label="Start Point")
+                
                 for r in top_regions:
                     rect = mpatches.Rectangle((r["j"], r["i"]), r["size"], r["size"], linewidth=2, edgecolor="lime", facecolor="none")
                     ax.add_patch(rect)
+                    # FIXED: Ensure numbers appear
                     ax.text(r["j"], max(0, r["i"]-5), str(r["rank"]), color="lime", fontsize=12, weight="bold")
+                
+                ax.legend(loc="lower right")
                 ax.axis("off")
                 st.pyplot(fig)
 
@@ -249,21 +239,25 @@ def main():
             
             st.divider()
 
-            # --- Teacher Mode (WITH FFT PHYSICS) ---
+            # Teacher Mode
             c_teach, c_plot = st.columns([1, 2])
             with c_teach:
                 st.subheader("👨‍🏫 Teacher Mode")
                 sel_rank = st.selectbox("Select Interesting Region:", [r["rank"] for r in top_regions])
                 target = next(r for r in top_regions if r["rank"] == sel_rank)
                 
-                # FFT Analysis
+                # FFT Physics Check
                 target_patch = img[target['i']:target['i']+target['size'], target['j']:target['j']+target['size']]
                 fft_mag, crystal_score = compute_fft_metrics(target_patch)
                 
                 st.write("**Physics Check (FFT):**")
                 c_fft1, c_fft2 = st.columns(2)
                 c_fft1.image(target_patch, caption="Real Space", use_column_width=True, clamp=True)
-                c_fft2.image(normalize(fft_mag), caption="Reciprocal Space", use_column_width=True, clamp=True)
+                
+                # Normalize FFT for display
+                fft_disp = fft_mag - fft_mag.min()
+                fft_disp = fft_disp / (fft_disp.max() + 1e-9)
+                c_fft2.image(fft_disp, caption="Reciprocal Space", use_column_width=True, clamp=True)
                 
                 if crystal_score > 50:
                     st.success(f"💎 Crystalline (Score: {crystal_score:.1f})")
@@ -277,7 +271,7 @@ def main():
                     st.session_state.current_map = new_map
                     st.session_state.mode = f"Supervised (Like #{sel_rank})"
                     st.session_state.history.append(new_map)
-                    log_message("Model updated. Priority map refreshed.")
+                    log_message("Model updated.")
                     st.rerun()
 
             with c_plot:
@@ -291,10 +285,9 @@ def main():
                     fig.update_layout(height=300, margin=dict(t=30, l=0, r=0, b=0))
                     st.plotly_chart(fig, use_container_width=True)
 
-    # --- TAB 3: Quantification & Search ---
+    # --- TAB 3: Quantification ---
     with tab_quant:
         c_q, c_s = st.columns(2)
-        
         with c_q:
             st.header("📏 Quantification")
             threshold = st.slider("Anomaly Threshold", 0.0, 1.0, 0.6)
@@ -337,7 +330,6 @@ def main():
             curr = st.session_state.current_map
             flat = np.sort(curr.flatten())[::-1]
             total_sig = flat.sum() + 1e-9
-            
             x_vals = np.linspace(0, 100, 50)
             y_vals = []
             for t in x_vals:
@@ -352,13 +344,11 @@ def main():
             ax.legend()
             st.pyplot(fig)
             
-            # Downloads
             c1, c2 = st.columns(2)
             with c1:
                 df_rep = pd.DataFrame({"Scan_Percentage": x_vals, "Signal_Captured": y_vals})
                 st.download_button("Download CSV Report", df_rep.to_csv(index=False), "efficiency.csv", "text/csv")
             with c2:
-                # Protocol Download
                 if st.session_state.results:
                     res = st.session_state.results
                     score = st.session_state.current_score
