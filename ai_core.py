@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 ai_core.py: The core AI engine.
-Contains logic for Feature Extraction, Anomaly Detection, and Active Learning.
+Contains logic for Feature Extraction, Anomaly Detection, Active Learning,
+and Physics-Based (FFT) Validation.
 """
 import torch
 import timm
@@ -62,6 +63,29 @@ def get_features(patches, backbone_name, device, batch_size=32):
         feats.append(f)
         
     return np.concatenate(feats, axis=0) if feats else np.empty((0,0))
+
+# --- NEW: Physics-Based FFT Analysis ---
+def compute_fft_metrics(patch):
+    """
+    Computes the Fast Fourier Transform (FFT) of a patch.
+    Returns the log-magnitude spectrum and a 'Crystallinity Score'.
+    """
+    # 1. Apply Windowing (Hanning) to reduce edge artifacts
+    h, w = patch.shape
+    window = np.outer(np.hanning(h), np.hanning(w))
+    patch_windowed = patch * window
+    
+    # 2. Compute 2D FFT
+    f_transform = np.fft.fft2(patch_windowed)
+    f_shift = np.fft.fftshift(f_transform)
+    magnitude_spectrum = 20 * np.log(np.abs(f_shift) + 1e-9)
+    
+    # 3. Calculate Crystallinity (Variance of spectrum)
+    # High variance = sharp diffraction spots (Crystalline)
+    # Low variance = amorphous/blurry
+    crystallinity_score = np.var(magnitude_spectrum)
+    
+    return magnitude_spectrum, crystallinity_score
 
 # --- Main Pipelines ---
 def run_analysis_pipeline(img, backbone, patch_sizes, strides, pca_dim=50):
