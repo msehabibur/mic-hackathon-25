@@ -4,11 +4,10 @@
 config.py: Configuration settings for the DeepScan Pro application.
 Stores constants, model names, default parameters, and hardware simulation settings.
 """
-from pathlib import Path
 
 # Page configuration
 PAGE_CONFIG = {
-    "page_title": "DeepScan Pro v7",
+    "page_title": "DeepScan Pro",
     "page_icon": "🔬",
     "layout": "wide",
     "initial_sidebar_state": "expanded"
@@ -28,4 +27,4 @@ DEFAULT_PCA_DIM = 50
 
 # Hardware Simulation Constants
 HARDWARE_NAME = "STEM-v3 Controller"
-CONNECTION_DELAY = 1.0
+CONNECTION_DELAY = 0.8
