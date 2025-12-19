@@ -18,7 +18,7 @@ from skimage import measure
 
 # Import configuration and modules
 from config import PAGE_CONFIG, AVAILABLE_MODELS, DEFAULT_PATCH_SIZES, DEFAULT_PCA_DIM, HARDWARE_NAME
-from utils import load_image_grayscale, get_default_image
+from utils import load_image_grayscale, get_default_image, normalize
 from ai_core import run_analysis_pipeline, train_classifier, search_by_text, compute_fft_metrics
 
 # =====================================================================================
@@ -49,152 +49,130 @@ def main():
     if "mode" not in st.session_state: st.session_state.mode = "Unsupervised"
     if "logs" not in st.session_state: st.session_state.logs = [] 
 
-    st.title("🔬 DeepScan Pro v7")
-    st.write("An Active Learning Pipeline for Intelligent Atomic Microscopy")
+    # --- MAIN TITLE ---
+    st.title("🔬 DeepScan Pro")
+    st.caption("🚀 Intelligent Active Learning for Atomic Microscopy | Purdue University")
 
-    # --- Sidebar ---
+    # --- SIDEBAR ---
     with st.sidebar:
-        st.header("⚙️ Configuration")
+        st.header("⚙️ System Control")
         
-        st.subheader("🔌 Hardware Status")
+        # Hardware Status
+        st.subheader("🔌 Hardware Link")
         if not st.session_state.connected:
-            st.error("🔴 Disconnected")
-            if st.button("Connect Microscope"):
+            st.error("🔴 Offline")
+            if st.button("⚡ Connect Microscope"):
                 with st.spinner("Handshaking with Controller..."):
                     time.sleep(0.8)
                     log_message(f"Connected to {HARDWARE_NAME}")
                 st.session_state.connected = True
                 st.rerun()
         else:
-            st.success(f"🟢 Connected ({HARDWARE_NAME})")
-            if st.button("Disconnect"):
+            st.success(f"🟢 Online ({HARDWARE_NAME})")
+            if st.button("❌ Disconnect"):
                 log_message("Disconnected from hardware.")
                 st.session_state.connected = False
                 st.rerun()
 
         st.divider()
-        st.subheader("📟 System Logs")
+
+        # System Logs
+        st.subheader("📟 Live Terminal")
         log_text = "\n".join(st.session_state.logs)
-        st.text_area("Console Output", value=log_text, height=150, disabled=True)
+        st.text_area("Console Output", value=log_text, height=120, disabled=True)
+        
         st.divider()
 
-        st.subheader("🖼️ Input Data")
-        uploaded = st.file_uploader("Upload Image", type=["png", "jpg", "tif"])
+        # Input Data
+        st.subheader("💾 Input Data")
+        uploaded = st.file_uploader("Upload Scan", type=["png", "jpg", "tif"])
         
         if uploaded:
             img_bytes = uploaded.getvalue()
             img = load_image_grayscale(io.BytesIO(img_bytes))
-            st.success("✅ Custom Image Loaded")
+            st.success("✅ File Loaded")
         elif st.session_state.img_cache is not None:
             img = st.session_state.img_cache 
         else:
             img = get_default_image()
             st.session_state.img_cache = img
-            st.info("ℹ️ Loaded Default STEM_example")
+            st.info("ℹ️ Demo Mode")
 
         if st.session_state.img_cache is None or not np.array_equal(img, st.session_state.img_cache):
             st.session_state.img_cache = img
             st.session_state.results = None
             st.session_state.history = []
-            log_message("New image loaded into memory.")
+            log_message("New buffer loaded.")
 
-        st.subheader("🤖 AI Model")
+        # Configuration
+        st.subheader("🧠 Model Config")
         backbone = st.selectbox("Vision Backbone", AVAILABLE_MODELS, index=1)
-
-        st.subheader("📏 Calibration")
         nm_per_pixel = st.number_input("Scale (nm/px)", value=1.0, min_value=0.01, format="%.2f")
 
-        st.subheader("🛠️ Parameters")
-        patch_size_input = st.multiselect("Patch Sizes", [32, 64, 128], default=DEFAULT_PATCH_SIZES)
-        stride_val = st.slider("Overlap (Stride divisor)", 1, 4, 2)
-        pca_dim = st.slider("PCA Dim", 10, 100, DEFAULT_PCA_DIM)
+        with st.expander("🛠️ Advanced Settings"):
+            patch_size_input = st.multiselect("Patch Sizes", [32, 64, 128], default=DEFAULT_PATCH_SIZES)
+            stride_val = st.slider("Overlap", 1, 4, 2)
+            pca_dim = st.slider("PCA Dim", 10, 100, DEFAULT_PCA_DIM)
 
         st.divider()
-        if st.button("🔴 Reset Session"):
+        if st.button("🔥 Reset System"):
             st.session_state.clear()
             st.rerun()
 
-    # --- Tabs ---
-    tab_about, tab_run, tab_quant, tab_analytics = st.tabs(["💡 How It Works", "1️⃣ Visual Scan", "2️⃣ Quantification & Search", "📊 Analytics"])
+    # --- TABS ---
+    tab_about, tab_run, tab_quant, tab_analytics = st.tabs(["💡 Logic", "👁️ Visual Scan", "📐 Metrology", "📈 Analytics"])
 
-    # --- TAB 1: How It Works (RESTORED) ---
+    # --- TAB 1: LOGIC (NICE MODE) ---
     with tab_about:
-        st.header("How DeepScan Works: From Pixels to Protocols")
+        st.header("How DeepScan Works")
+        
+        # Author Card
         with st.container(border=True):
-            st.markdown("**Md Habibur Rahman** *School of Materials Engineering, Purdue University*")
-        
-        if os.path.exists("workflow.png"):
-            st.image("workflow.png", caption="Figure 1: The DeepScan Pro Architecture.", use_container_width=True)
-        else:
-            st.warning("⚠️ workflow.png not found.")
+            c_auth1, c_auth2 = st.columns([1, 4])
+            with c_auth1:
+                st.image("https://api.dicebear.com/9.x/initials/svg?seed=MR", width=60)
+            with c_auth2:
+                st.markdown("**Md Habibur Rahman**")
+                st.markdown("*School of Materials Engineering, Purdue University*")
+                st.markdown("📧 `rahma103@purdue.edu`")
 
-        st.info("This application implements a multi-stage pipeline to turn passive images into active scanning protocols.")
-        
+        if os.path.exists("workflow.png"):
+            st.image("workflow.png", caption="Figure 1: The Active Learning Architecture.", use_container_width=True)
+        else:
+            st.warning("⚠️ Diagram missing.")
+
+        st.info("DeepScan transforms passive images into active hardware protocols.", icon="⚡")
         st.markdown("---")
 
-        # RESTORED MATH SECTIONS
-        st.header("1. Sliding Window & Feature Extraction")
-        st.markdown("""
-        The high-resolution microscope image $I$ is essentially a massive matrix of pixels. 
-        We cannot process it all at once, so we decompose it into small overlapping patches.
-        
-        **The Neural Backbone:**
-        We use **RegNet** or **ConvNeXt**, which are modern Convolutional Neural Networks (CNNs).
-        Unlike standard pixel analysis, these networks extract *semantic features*.
-        
-        Mathematically, for a patch $x$, the network outputs a high-dimensional vector $z$:
-        """)
-        st.latex(r"z = f_{\theta}(x) \in \mathbb{R}^{1024}")
-        st.markdown("This vector $z$ is invariant to small rotations and noise, capturing the 'essence' (texture, shape) of the patch.")
+        # --- THE "NICE MODE" ACCORDIONS ---
+        with st.expander("👁️ **Step 1: The 'See' Phase (Neural Extraction)**", expanded=True):
+            st.markdown("""
+            The system decomposes the scan into overlapping patches. 
+            A **RegNet** or **ConvNeXt** extracts semantic features $z$ from each patch $x$.
+            """)
+            st.latex(r"z = f_{\theta}(x) \in \mathbb{R}^{1024}")
 
-        st.divider()
+        with st.expander("🧠 **Step 2: The 'Think' Phase (Anomaly Detection)**", expanded=False):
+            st.markdown("""
+            We use **Isolation Forests** to build a 'Surprisal Map' of the sample.
+            Rare features (defects) are isolated faster than common lattice structures.
+            """)
+            st.latex(r"s(x, n) = 2^{- \frac{E(h(x))}{c(n)}}")
 
-        st.header("2. Dimensionality Reduction (PCA)")
-        st.markdown("""
-        The raw feature vectors are too large (e.g., 1024 dimensions) and contain redundant information. 
-        We use **Principal Component Analysis (PCA)** to project them into a lower-dimensional space (e.g., 50 dimensions) 
-        that preserves the maximum variance.
-        
-        We find a projection matrix $W$ by solving the eigenvalue problem for the covariance matrix $C$:
-        """)
-        st.latex(r"C = \frac{1}{n} \sum_{i=1}^{n} (z_i - \bar{z})(z_i - \bar{z})^T")
+        with st.expander("🎓 **Step 3: The 'Learn' Phase (Teacher Mode)**", expanded=False):
+            st.markdown("""
+            When you click a target, we train a **Few-Shot Classifier** instantly.
+            This updates the probability map to find specific features like vacancies or cracks.
+            """)
+            st.latex(r"P(y=1|z) = \frac{1}{1 + e^{-(w^T z + b)}}")
 
-        st.divider()
-
-        st.header("3. Unsupervised Anomaly Detection (Isolation Forest)")
-        st.markdown("""
-        How do we know what is "interesting" without any labels? We assume that **rare** things are interesting.
-        We use an **Isolation Forest**, which builds random decision trees.
-        
-        The anomaly score is defined as:
-        """)
-        st.latex(r"s(x, n) = 2^{- \frac{E(h(x))}{c(n)}}")
-        st.markdown("""
-        * $h(x)$: Path length to isolate sample $x$.
-        * $c(n)$: Average path length of a binary search tree (Normalization).
-        
-        Scores close to 1 indicate high anomaly (high priority for scanning).
-        """)
-
-        st.divider()
-
-        st.header("4. Active Learning (Teacher Mode)")
-        st.markdown("""
-        When you click "Find More Like This", you turn the system into a **Supervised** learner. 
-        We train a **Logistic Regression** classifier on the fly using your selected patch as a *Positive* example ($y=1$) 
-        and random background patches as *Negative* examples ($y=0$).
-        
-        The model learns weights $w$ to maximize the likelihood:
-        """)
-        st.latex(r"P(y=1|z) = \frac{1}{1 + e^{-(w^T z + b)}}")
-
-    # --- TAB 2: Visual Scan ---
+    # --- TAB 2: VISUAL SCAN ---
     with tab_run:
-        st.header("🚀 AI-Powered Analysis")
+        st.header("🚀 AI-Powered Discovery")
         
-        if st.button("✨ Run Full Analysis", type="primary"):
-            log_message(f"Starting analysis with {backbone}...")
-            with st.spinner(f"Analyzing with {backbone}..."):
+        if st.button("✨ Initialize DeepScan", type="primary", use_container_width=True):
+            log_message(f"Initializing {backbone}...")
+            with st.spinner(f"Processing with {backbone}..."):
                 strides = tuple([p // stride_val for p in patch_size_input])
                 res = run_analysis_pipeline(img, backbone, tuple(patch_size_input), strides, pca_dim=pca_dim)
                 if res:
@@ -215,10 +193,11 @@ def main():
             top_regions = [{"rank": r+1, "id": i, "i": res["coords"][i][0], "j": res["coords"][i][1], "size": res["coords"][i][2]} for r, i in enumerate(top_idx)]
 
             # --- Simulation ---
-            c_sim, c_view = st.columns([1, 3])
+            c_sim, c_view = st.columns([1, 2])
             with c_sim:
-                st.markdown("### 🎮 Control")
-                if st.button("▶️ Simulate Live Scan"):
+                st.success("Analysis Ready")
+                st.markdown("### 🎮 Stage Control")
+                if st.button("▶️ Simulate Live Scan", type="secondary"):
                     log_message("Starting live scan simulation...")
                     placeholder = c_view.empty()
                     for step in range(1, len(top_regions) + 1):
@@ -231,22 +210,19 @@ def main():
                         if len(current_regions) > 1:
                             py = [r["i"] + r["size"]//2 for r in current_regions]
                             px_coords = [r["j"] + r["size"]//2 for r in current_regions]
-                            ax.plot(px_coords, py, 'r--', linewidth=2, alpha=0.8, label="Optimized Path")
+                            ax.plot(px_coords, py, 'r--', linewidth=2, alpha=0.8, label="Path")
                         
-                        # Draw Boxes
                         last_r = current_regions[-1]
-                        rect = mpatches.Rectangle((last_r["j"], last_r["i"]), last_r["size"], last_r["size"], linewidth=3, edgecolor="lime", facecolor="none")
+                        rect = mpatches.Rectangle((last_r["j"], last_r["i"]), last_r["size"], last_r["size"], linewidth=3, edgecolor="#00FF7F", facecolor="none")
                         ax.add_patch(rect)
-                        
-                        # Draw Text Label
-                        ax.text(last_r["j"], max(0, last_r["i"]-5), str(last_r["rank"]), color="lime", fontsize=14, weight="bold")
+                        ax.text(last_r["j"], max(0, last_r["i"]-5), str(last_r["rank"]), color="#00FF7F", fontsize=14, weight="bold")
                         
                         ax.axis("off")
-                        ax.set_title(f"Scanning Region #{last_r['rank']}...", color="lime")
+                        ax.set_title(f"Scanning Region #{last_r['rank']}...", color="#00FF7F")
                         
                         placeholder.pyplot(fig)
                         plt.close(fig)
-                        time.sleep(0.5)
+                        time.sleep(0.4)
                     
                     log_message("Scan simulation completed.")
                     st.rerun()
@@ -254,29 +230,27 @@ def main():
             # --- Static View ---
             col1, col2 = st.columns(2)
             with col1:
-                st.subheader("Microscope View")
+                st.markdown("#### 🔭 Microscope View")
                 fig, ax = plt.subplots(figsize=(6, 6))
                 ax.imshow(img, cmap="gray")
                 
                 path_y = [r["i"] + r["size"]//2 for r in top_regions]
                 path_x = [r["j"] + r["size"]//2 for r in top_regions]
                 
-                # Plot Path & Start
                 ax.plot(path_x, path_y, 'r--', linewidth=1.5, alpha=0.8, label="Optimized Path")
-                ax.scatter(path_x[0], path_y[0], c='lime', s=100, zorder=5, label="Start Point")
+                ax.scatter(path_x[0], path_y[0], c='#00FF7F', s=100, zorder=5, label="Start Point")
                 
                 for r in top_regions:
-                    rect = mpatches.Rectangle((r["j"], r["i"]), r["size"], r["size"], linewidth=2, edgecolor="lime", facecolor="none")
+                    rect = mpatches.Rectangle((r["j"], r["i"]), r["size"], r["size"], linewidth=2, edgecolor="#00FF7F", facecolor="none")
                     ax.add_patch(rect)
-                    # Label
-                    ax.text(r["j"], max(0, r["i"]-5), str(r["rank"]), color="lime", fontsize=12, weight="bold")
+                    ax.text(r["j"], max(0, r["i"]-5), str(r["rank"]), color="#00FF7F", fontsize=12, weight="bold")
                 
                 ax.legend(loc="lower right")
                 ax.axis("off")
                 st.pyplot(fig)
 
             with col2:
-                st.subheader(f"Priority Map ({st.session_state.mode})")
+                st.markdown(f"#### 🗺️ Priority Map ({st.session_state.mode})")
                 fig, ax = plt.subplots(figsize=(6, 6))
                 ax.imshow(img, cmap="gray", alpha=0.4)
                 im = ax.imshow(st.session_state.current_map, cmap="jet", alpha=0.6)
@@ -286,8 +260,8 @@ def main():
 
             st.divider()
             
-            # Defect Gallery
-            st.subheader("🔍 Identified Anomalies")
+            # Gallery
+            st.markdown("#### 🔍 Detected Anomalies")
             cols = st.columns(5)
             for idx, col in enumerate(cols):
                 if idx < 5 and idx < len(top_regions):
@@ -301,28 +275,28 @@ def main():
             c_teach, c_plot = st.columns([1, 2])
             with c_teach:
                 st.subheader("👨‍🏫 Teacher Mode")
-                sel_rank = st.selectbox("Select Interesting Region:", [r["rank"] for r in top_regions])
+                st.info("Select a region to train the AI.")
+                sel_rank = st.selectbox("Select Target:", [r["rank"] for r in top_regions])
                 target = next(r for r in top_regions if r["rank"] == sel_rank)
                 
-                # FFT Physics Check
+                # FFT Check
                 target_patch = img[target['i']:target['i']+target['size'], target['j']:target['j']+target['size']]
                 fft_mag, crystal_score = compute_fft_metrics(target_patch)
                 
-                st.write("**Physics Check (FFT):**")
+                st.markdown("**⚛️ Physics Check (FFT)**")
                 c_fft1, c_fft2 = st.columns(2)
                 c_fft1.image(target_patch, caption="Real Space", use_column_width=True, clamp=True)
                 
-                # Normalize FFT for display
                 fft_disp = fft_mag - fft_mag.min()
                 fft_disp = fft_disp / (fft_disp.max() + 1e-9)
-                c_fft2.image(fft_disp, caption="Reciprocal Space", use_column_width=True, clamp=True)
+                c_fft2.image(fft_disp, caption="Reciprocal", use_column_width=True, clamp=True)
                 
                 if crystal_score > 50:
-                    st.success(f"💎 Crystalline (Score: {crystal_score:.1f})")
+                    st.success(f"💎 Crystalline ({crystal_score:.0f})")
                 else:
-                    st.warning(f"☁️ Amorphous/Defect (Score: {crystal_score:.1f})")
+                    st.warning(f"☁️ Amorphous ({crystal_score:.0f})")
 
-                if st.button("Find More Like This 🔍"):
+                if st.button("🔎 Find More Like This"):
                     log_message(f"Training active learner on Region #{sel_rank}...")
                     new_score, new_map = train_classifier(res["features"], res["coords"], img.shape, target["id"])
                     st.session_state.current_score = new_score
@@ -339,16 +313,16 @@ def main():
                     df["score"] = score
                     df["size"] = 2
                     if target["id"] < len(df): df.loc[target["id"], "size"] = 10
-                    fig = px.scatter(df, x="x", y="y", color="score", size="size", color_continuous_scale="Jet", title="Latent Space")
-                    fig.update_layout(height=300, margin=dict(t=30, l=0, r=0, b=0))
+                    fig = px.scatter(df, x="x", y="y", color="score", size="size", color_continuous_scale="Jet", title="Latent Feature Space")
+                    fig.update_layout(height=350, margin=dict(t=30, l=0, r=0, b=0))
                     st.plotly_chart(fig, use_container_width=True)
 
-    # --- TAB 3: Quantification ---
+    # --- TAB 3: METROLOGY ---
     with tab_quant:
         c_q, c_s = st.columns(2)
         with c_q:
-            st.header("📏 Quantification")
-            threshold = st.slider("Anomaly Threshold", 0.0, 1.0, 0.6)
+            st.header("📐 Quantification")
+            threshold = st.slider("Segmentation Threshold", 0.0, 1.0, 0.6)
             if st.session_state.current_map is not None:
                 binary_map = st.session_state.current_map > threshold
                 labels = measure.label(binary_map)
@@ -362,13 +336,13 @@ def main():
                 
                 total_pixels = binary_map.sum()
                 area_nm2 = total_pixels * (nm_per_pixel ** 2)
-                st.metric("Count", int(n_features))
+                st.metric("Feature Count", int(n_features))
                 st.metric("Total Area", f"{area_nm2:.1f} nm²")
 
         with c_s:
             st.header("💬 Semantic Search")
-            st.info("Use CLIP to find defects by text description.")
-            query = st.text_input("Query:", placeholder="e.g. 'linear cracks'")
+            st.info("Type a description to find specific defects.")
+            query = st.text_input("Query:", placeholder="e.g. 'linear cracks', 'hexagonal lattice'")
             if st.button("Search"):
                 if st.session_state.results:
                     log_message(f"Searching for: '{query}'")
@@ -381,9 +355,9 @@ def main():
                         st.session_state.history.append(text_map)
                         st.rerun()
 
-    # --- TAB 4: Analytics ---
+    # --- TAB 4: ANALYTICS ---
     with tab_analytics:
-        st.header("📊 Efficiency Report")
+        st.header("📈 Efficiency Report")
         if st.session_state.current_map is not None:
             curr = st.session_state.current_map
             flat = np.sort(curr.flatten())[::-1]
@@ -395,9 +369,9 @@ def main():
                 y_vals.append((flat[:cutoff].sum() / total_sig) * 100)
             
             fig, ax = plt.subplots(figsize=(8, 3))
-            ax.plot(x_vals, y_vals, 'r-', linewidth=2, label="AI Scan")
-            ax.plot(x_vals, x_vals, 'k--', alpha=0.3, label="Random")
-            ax.set_ylabel("% Anomalies Found")
+            ax.plot(x_vals, y_vals, 'r-', linewidth=2, label="DeepScan (AI)")
+            ax.plot(x_vals, x_vals, 'k--', alpha=0.3, label="Random Scan")
+            ax.set_ylabel("% Signal Captured")
             ax.set_xlabel("% Time Spent")
             ax.legend()
             st.pyplot(fig)
@@ -405,7 +379,7 @@ def main():
             c1, c2 = st.columns(2)
             with c1:
                 df_rep = pd.DataFrame({"Scan_Percentage": x_vals, "Signal_Captured": y_vals})
-                st.download_button("Download CSV Report", df_rep.to_csv(index=False), "efficiency.csv", "text/csv")
+                st.download_button("💾 Download Report (CSV)", df_rep.to_csv(index=False), "efficiency.csv", "text/csv")
             with c2:
                 if st.session_state.results:
                     res = st.session_state.results
@@ -413,10 +387,10 @@ def main():
                     top_idx = np.argsort(score)[-10:][::-1]
                     top_regions = [{"rank": r+1, "x": int(res["coords"][i][1]), "y": int(res["coords"][i][0])} for r, i in enumerate(top_idx)]
                     
-                    protocol = {"timestamp": "2025-12-18", "points": top_regions}
-                    if st.download_button("Download Hardware Protocol (.json)", json.dumps(protocol, indent=2), "protocol.json", "application/json"):
+                    protocol = {"timestamp": "2025-12-18", "author": "rahma103", "points": top_regions}
+                    if st.download_button("🤖 Export Protocol (.json)", json.dumps(protocol, indent=2), "protocol.json", "application/json"):
                         st.balloons()
-                        log_message("Protocol exported to controller.")
+                        log_message("Protocol sent to microscope controller.")
 
 if __name__ == "__main__":
     main()
