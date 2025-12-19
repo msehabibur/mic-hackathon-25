@@ -117,7 +117,7 @@ def main():
     # --- Tabs ---
     tab_about, tab_run, tab_quant, tab_analytics = st.tabs(["💡 How It Works", "1️⃣ Visual Scan", "2️⃣ Quantification & Search", "📊 Analytics"])
 
-    # --- TAB 1: How It Works ---
+    # --- TAB 1: How It Works (RESTORED) ---
     with tab_about:
         st.header("How DeepScan Works: From Pixels to Protocols")
         with st.container(border=True):
@@ -129,6 +129,64 @@ def main():
             st.warning("⚠️ workflow.png not found.")
 
         st.info("This application implements a multi-stage pipeline to turn passive images into active scanning protocols.")
+        
+        st.markdown("---")
+
+        # RESTORED MATH SECTIONS
+        st.header("1. Sliding Window & Feature Extraction")
+        st.markdown("""
+        The high-resolution microscope image $I$ is essentially a massive matrix of pixels. 
+        We cannot process it all at once, so we decompose it into small overlapping patches.
+        
+        **The Neural Backbone:**
+        We use **RegNet** or **ConvNeXt**, which are modern Convolutional Neural Networks (CNNs).
+        Unlike standard pixel analysis, these networks extract *semantic features*.
+        
+        Mathematically, for a patch $x$, the network outputs a high-dimensional vector $z$:
+        """)
+        st.latex(r"z = f_{\theta}(x) \in \mathbb{R}^{1024}")
+        st.markdown("This vector $z$ is invariant to small rotations and noise, capturing the 'essence' (texture, shape) of the patch.")
+
+        st.divider()
+
+        st.header("2. Dimensionality Reduction (PCA)")
+        st.markdown("""
+        The raw feature vectors are too large (e.g., 1024 dimensions) and contain redundant information. 
+        We use **Principal Component Analysis (PCA)** to project them into a lower-dimensional space (e.g., 50 dimensions) 
+        that preserves the maximum variance.
+        
+        We find a projection matrix $W$ by solving the eigenvalue problem for the covariance matrix $C$:
+        """)
+        st.latex(r"C = \frac{1}{n} \sum_{i=1}^{n} (z_i - \bar{z})(z_i - \bar{z})^T")
+
+        st.divider()
+
+        st.header("3. Unsupervised Anomaly Detection (Isolation Forest)")
+        st.markdown("""
+        How do we know what is "interesting" without any labels? We assume that **rare** things are interesting.
+        We use an **Isolation Forest**, which builds random decision trees.
+        
+        The anomaly score is defined as:
+        """)
+        st.latex(r"s(x, n) = 2^{- \frac{E(h(x))}{c(n)}}")
+        st.markdown("""
+        * $h(x)$: Path length to isolate sample $x$.
+        * $c(n)$: Average path length of a binary search tree (Normalization).
+        
+        Scores close to 1 indicate high anomaly (high priority for scanning).
+        """)
+
+        st.divider()
+
+        st.header("4. Active Learning (Teacher Mode)")
+        st.markdown("""
+        When you click "Find More Like This", you turn the system into a **Supervised** learner. 
+        We train a **Logistic Regression** classifier on the fly using your selected patch as a *Positive* example ($y=1$) 
+        and random background patches as *Negative* examples ($y=0$).
+        
+        The model learns weights $w$ to maximize the likelihood:
+        """)
+        st.latex(r"P(y=1|z) = \frac{1}{1 + e^{-(w^T z + b)}}")
 
     # --- TAB 2: Visual Scan ---
     with tab_run:
@@ -193,7 +251,7 @@ def main():
                     log_message("Scan simulation completed.")
                     st.rerun()
 
-            # --- Static View (FIXED: Added Labels Back) ---
+            # --- Static View ---
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("Microscope View")
@@ -203,14 +261,14 @@ def main():
                 path_y = [r["i"] + r["size"]//2 for r in top_regions]
                 path_x = [r["j"] + r["size"]//2 for r in top_regions]
                 
-                # FIXED: Added labels for the legend
+                # Plot Path & Start
                 ax.plot(path_x, path_y, 'r--', linewidth=1.5, alpha=0.8, label="Optimized Path")
                 ax.scatter(path_x[0], path_y[0], c='lime', s=100, zorder=5, label="Start Point")
                 
                 for r in top_regions:
                     rect = mpatches.Rectangle((r["j"], r["i"]), r["size"], r["size"], linewidth=2, edgecolor="lime", facecolor="none")
                     ax.add_patch(rect)
-                    # FIXED: Ensure numbers appear
+                    # Label
                     ax.text(r["j"], max(0, r["i"]-5), str(r["rank"]), color="lime", fontsize=12, weight="bold")
                 
                 ax.legend(loc="lower right")
