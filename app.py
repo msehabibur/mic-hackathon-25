@@ -122,19 +122,16 @@ def main():
     # --- TABS ---
     tab_about, tab_run, tab_quant, tab_analytics = st.tabs(["💡 Logic", "👁️ Visual Scan", "📐 Metrology", "📈 Analytics"])
 
-    # --- TAB 1: LOGIC (NICE MODE) ---
+    # --- TAB 1: LOGIC (UPDATED AUTHOR FORMAT) ---
     with tab_about:
         st.header("How DeepScan Works")
         
-        # Author Card
+        # Author Card (Updated Format)
         with st.container(border=True):
-            c_auth1, c_auth2 = st.columns([1, 4])
-            with c_auth1:
-                st.image("https://api.dicebear.com/9.x/initials/svg?seed=MR", width=60)
-            with c_auth2:
-                st.markdown("**Md Habibur Rahman**")
-                st.markdown("*School of Materials Engineering, Purdue University*")
-                st.markdown("📧 `rahma103@purdue.edu`")
+            st.markdown("""
+            **Md Habibur Rahman** School of Materials Engineering, Purdue University, West Lafayette, IN 47907, USA  
+            rahma103@purdue.edu
+            """)
 
         if os.path.exists("workflow.png"):
             st.image("workflow.png", caption="Figure 1: The Active Learning Architecture.", use_container_width=True)
@@ -166,11 +163,12 @@ def main():
             """)
             st.latex(r"P(y=1|z) = \frac{1}{1 + e^{-(w^T z + b)}}")
 
-    # --- TAB 2: VISUAL SCAN ---
+    # --- TAB 2: VISUAL SCAN (SMALLER BUTTON) ---
     with tab_run:
         st.header("🚀 AI-Powered Discovery")
         
-        if st.button("✨ Initialize DeepScan", type="primary", use_container_width=True):
+        # Button is now smaller (removed use_container_width=True)
+        if st.button("✨ Initialize DeepScan", type="primary"):
             log_message(f"Initializing {backbone}...")
             with st.spinner(f"Processing with {backbone}..."):
                 strides = tuple([p // stride_val for p in patch_size_input])
